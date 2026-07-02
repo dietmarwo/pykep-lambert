@@ -1,0 +1,288 @@
+{
+  "meta": {
+    "problem": "problems/easy.kttsp",
+    "max_revs": [
+      5,
+      2,
+      0
+    ],
+    "samples": 32768,
+    "workers_requested": 8,
+    "table_workers_requested": 16,
+    "seed": 12345,
+    "optimizer_evals": 4096,
+    "optimizer_popsize": 32,
+    "python": "3.12.13",
+    "pykep": {
+      "major": 2,
+      "minor": 6
+    }
+  },
+  "lambert": {
+    "numba_threads": 8,
+    "results": [
+      {
+        "section": "lambert",
+        "mode": "pykep serial",
+        "samples": 32768,
+        "seconds": 0.8318144959921483,
+        "calls_per_second": 39393.398597743726,
+        "speedup_vs_pykep_serial": 1.0
+      },
+      {
+        "section": "lambert",
+        "mode": "pykep batch 8",
+        "samples": 32768,
+        "seconds": 0.19131686000037007,
+        "calls_per_second": 171276.07049340353,
+        "speedup_vs_pykep_serial": 4.347836860747868
+      },
+      {
+        "section": "lambert",
+        "mode": "numba serial",
+        "samples": 32768,
+        "seconds": 0.063201480981661,
+        "calls_per_second": 518468.863245597,
+        "speedup_vs_pykep_serial": 13.161313359627025
+      },
+      {
+        "section": "lambert",
+        "mode": "numba batch 8",
+        "samples": 32768,
+        "seconds": 0.01040226497570984,
+        "calls_per_second": 3150083.1863556663,
+        "speedup_vs_pykep_serial": 79.96474786351864
+      }
+    ],
+    "correctness": {
+      "finite_compared": 32768,
+      "max_abs_dv_m_s": 4.18367562815547e-11,
+      "mean_abs_dv_m_s": 5.126010293315941e-14,
+      "max_rel": 1.7903088754118263e-14,
+      "pykep_batch_max_abs": 0.0,
+      "numba_batch_max_abs": 0.0
+    }
+  },
+  "compute_transfer": {
+    "numba_threads": 8,
+    "results": [
+      {
+        "section": "compute_transfer",
+        "mode": "pykep serial",
+        "samples": 32768,
+        "seconds": 0.8393828120024409,
+        "calls_per_second": 39038.20703908423,
+        "speedup_vs_pykep_serial": 1.0
+      },
+      {
+        "section": "compute_transfer",
+        "mode": "pykep batch 8",
+        "samples": 32768,
+        "seconds": 0.1133491590153426,
+        "calls_per_second": 289089.0438416453,
+        "speedup_vs_pykep_serial": 7.405284867520055
+      },
+      {
+        "section": "compute_transfer",
+        "mode": "numba serial",
+        "samples": 32768,
+        "seconds": 0.10688238398870453,
+        "calls_per_second": 306579.9879937461,
+        "speedup_vs_pykep_serial": 7.853331678035437
+      },
+      {
+        "section": "compute_transfer",
+        "mode": "numba batch 8",
+        "samples": 32768,
+        "seconds": 0.019163253979058936,
+        "calls_per_second": 1709939.2428763898,
+        "speedup_vs_pykep_serial": 43.80168487667569
+      }
+    ],
+    "correctness": {
+      "finite_compared": 32768,
+      "max_abs_dv_m_s": 3.2755951906437986e-07,
+      "mean_abs_dv_m_s": 1.7450147126981189e-10,
+      "max_rel": 1.6662656465202954e-10,
+      "pykep_batch_max_abs": 0.0,
+      "numba_batch_max_abs": 0.0
+    }
+  },
+  "table_creation": {
+    "numba_threads": 16,
+    "pykep_workers": null,
+    "settings": {
+      "cluster": "all",
+      "target_max_time": 200.0,
+      "min_tof": [
+        0.05,
+        0.2,
+        0.35
+      ],
+      "max_tof": [
+        1.5,
+        5.0,
+        0.65
+      ],
+      "tof_step": [
+        0.05,
+        0.2,
+        0.1
+      ],
+      "t_start_step": [
+        0.05,
+        0.2,
+        0.1
+      ],
+      "dv_limit": [
+        105.0,
+        105.0,
+        605.0
+      ],
+      "store_mode": "best-per-departure",
+      "batch_chunk": 1000000,
+      "t_start_grid_sizes": [
+        3999,
+        999,
+        1997
+      ],
+      "tof_grid_sizes": [
+        30,
+        25,
+        4
+      ],
+      "pair_filter": {
+        "rejected_self": 49,
+        "rejected_cluster": 0,
+        "rejected_dv_bound": 1878,
+        "kept": 474
+      },
+      "expected_valid_cells": 10709178
+    },
+    "results": [
+      {
+        "section": "table_creation",
+        "mode": "numba table batch 16",
+        "samples": 10709178,
+        "seconds": 1.8280688179947902,
+        "calls_per_second": 5858191.931607314,
+        "speedup_vs_pykep_serial": null,
+        "retained_cells": 175150,
+        "nonempty_pairs": 301,
+        "pair_count": 474,
+        "pair_type_counts": [
+          36,
+          174,
+          264
+        ],
+        "evaluated_by_type": [
+          4304304,
+          4297626,
+          2107248
+        ],
+        "retained_by_type": [
+          65861,
+          71768,
+          37521
+        ]
+      }
+    ]
+  },
+  "optimization": {
+    "numba_threads": 8,
+    "settings": {
+      "from": 0,
+      "to": 1,
+      "current_time": 0.0,
+      "max_wait": 12.0,
+      "max_tof": 12.0,
+      "dv_limit": 600.0,
+      "popsize": 32,
+      "bite_popsize": 0,
+      "bite_m": 1,
+      "max_evals": 4096
+    },
+    "results": [
+      {
+        "backend": "pykep",
+        "optimizer": "cma_ask_tell",
+        "seconds": 0.056654854997759685,
+        "evals": 3812,
+        "evals_per_second": 67284.6131218717,
+        "feasible": true,
+        "best": {
+          "wait": 0.0,
+          "tof": 0.9691808170778735,
+          "departure": 0.0,
+          "arrival": 0.9691808170778735,
+          "dv": 600.0000000967268,
+          "excess": 9.672680789662991e-08
+        },
+        "stop": 2,
+        "result_fun": 0.9691808171241005,
+        "result_success": true,
+        "result_status": 2
+      },
+      {
+        "backend": "numba",
+        "optimizer": "cma_ask_tell",
+        "seconds": 0.6943647710140795,
+        "evals": 3876,
+        "evals_per_second": 5582.080430634934,
+        "feasible": true,
+        "best": {
+          "wait": 0.0,
+          "tof": 0.9691808170780165,
+          "departure": 0.0,
+          "arrival": 0.9691808170780166,
+          "dv": 600.0000000964272,
+          "excess": 9.642724307923345e-08
+        },
+        "stop": 2,
+        "result_fun": 0.9691808171247756,
+        "result_success": true,
+        "result_status": 2
+      },
+      {
+        "backend": "pykep",
+        "optimizer": "bite_minimize",
+        "seconds": 0.05974549599341117,
+        "evals": 4096,
+        "evals_per_second": 68557.46917644994,
+        "feasible": true,
+        "best": {
+          "wait": 0.4599657709158427,
+          "tof": 0.5435511096634289,
+          "departure": 0.4599657709158427,
+          "arrival": 1.0035168805792716,
+          "dv": 600.0000000191657,
+          "excess": 1.9165668163623195e-08
+        },
+        "stop": 0,
+        "result_fun": 1.0035168806684394,
+        "result_success": true,
+        "result_status": 0
+      },
+      {
+        "backend": "numba",
+        "optimizer": "bite_minimize",
+        "seconds": 0.014041963004274294,
+        "evals": 4096,
+        "evals_per_second": 291697.1080719413,
+        "feasible": true,
+        "best": {
+          "wait": 0.45996188308656183,
+          "tof": 0.5435549983259553,
+          "departure": 0.45996188308656183,
+          "arrival": 1.003516881412517,
+          "dv": 600.0000000714406,
+          "excess": 7.144058145058807e-08
+        },
+        "stop": 0,
+        "result_fun": 1.0035168814625515,
+        "result_success": true,
+        "result_status": 0
+      }
+    ]
+  }
+}
