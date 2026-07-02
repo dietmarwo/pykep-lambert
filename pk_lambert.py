@@ -1,7 +1,7 @@
 """Exact Numba port of pykep 2.6 lambert_problem.cpp (Izzo 2015) + calibrated
 Keplerian propagation, matching utils_users.compute_transfer bit-for-bit
-(including fold-edge needles). All angles/elements per ESA convention:
-6th orbital element = MEAN anomaly; mu = 4.90487e12.
+(including fold-edge needles). pykep 2.6 planet.keplerian elements are
+a,e,i,W,w,M: the 6th orbital element is mean anomaly; mu = 4.90487e12.
 """
 import numpy as np
 from numba import njit

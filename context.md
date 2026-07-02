@@ -99,14 +99,16 @@ Important details:
   `max_revs`, the value is indexed by transfer type.
 - Default benchmark `max_revs` is `[5, 2, 0]`.
 
+For pykep 2.6 `planet.keplerian`, the six orbital elements are
+`a,e,i,W,w,M`; the sixth value is mean anomaly. This is distinct from lower
+level element-to-Cartesian routines such as `par2ic`, which operate on
+eccentric anomaly after pykep converts `M` with `m2e()`. The Numba path mirrors
+that split: it stores `M0`, advances it as `M0 + n * dt`, solves Kepler's
+equation to obtain eccentric anomaly `E`, and then forms the Cartesian state.
+
 The local code classifies inner/outer clusters by the largest gap in
 semi-major axis. Do not remove `transfer_type()`, `is_inner()`, `is_outer()`,
 or `is_cluster_switch()`; `NumbaTransfer` depends on them.
-
-The orbital row variable names in `utils_users.py` include `true_anomaly`, but
-the Numba propagation treats the sixth element as `M0` and has been validated
-against the pykep reference path. Do not "fix" that naming without a numerical
-validation pass against pykep.
 
 ## Core APIs
 

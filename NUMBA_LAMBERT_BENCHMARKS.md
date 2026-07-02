@@ -32,7 +32,9 @@ by pykep 2.6's `lambert_problem` implementation:
   multi-revolution candidates, matching the pykep-facing code path.
 - The Kepler propagation side was implemented in Numba using the same orbital
   element convention used by the KTTSP problem files and pykep
-  `planet.keplerian`.
+  `planet.keplerian`: `a,e,i,W,w,M`, where the sixth element is mean anomaly.
+  Lower-level state conversion uses eccentric anomaly only after solving
+  Kepler's equation, matching pykep 2.6's `M -> E -> Cartesian` path.
 - `dv_full_batch` and `lambert_dv_batch` wrap the scalar kernels in `prange` so
   a CMA population, transfer table row, or benchmark batch can be evaluated in
   one threaded call.

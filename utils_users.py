@@ -124,8 +124,8 @@ class TomatoProblem:
 
         self.tomatoes = []
         for row in self.tomato_orbital_parameters:
-            a, e, incl, raan, arg_periapsis, true_anomaly = row
-            elements = [a, e, incl, raan, arg_periapsis, true_anomaly]
+            a, e, incl, raan, arg_periapsis, mean_anomaly = row
+            elements = [a, e, incl, raan, arg_periapsis, mean_anomaly]
             tomato = pk.planet.keplerian(self.t0, elements, MU_MOON, 0.0, 0.0, 0.0)
             self.tomatoes.append(tomato)
         self._build_clusters()
