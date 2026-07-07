@@ -2,6 +2,7 @@
 
 This directory contains a Numba port of pykep 2.6's Izzo Lambert solver plus
 small tooling to compare it against the original pykep implementation.
+See the related post [Lunar Tomato War](https://www.linkedin.com/pulse/algorithms-ai-lunar-tomato-war-final-debrief-from-esas-wolz-qbxle) 
 
 ## Main Result
 
