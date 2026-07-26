@@ -3,7 +3,7 @@
 
 //! Fixed KTTSP Lambert-leg objective using the published Rust crates.
 
-use fcmaes_core::{NAN_REPLACEMENT, Objective};
+use fcmaes_core::{NAN_REPLACEMENT, Objective, parallel_batch};
 use pykep_core::astro::elements::ClassicalElements;
 use pykep_core::astro::lambert::LambertProblem;
 use pykep_core::ephemeris::{Ephemeris, KeplerianEphemeris};
@@ -98,6 +98,132 @@ pub struct Evaluation {
     pub objective: f64,
 }
 
+/// One ephemeris propagation request for a body in [`FixedLegProblem`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PropagationRequest {
+    /// Zero-based body index.
+    pub body_index: usize,
+    /// Requested epoch relative to MJD2000, in days.
+    pub epoch_day: f64,
+}
+
+impl PropagationRequest {
+    /// Constructs a propagation request.
+    #[must_use]
+    pub const fn new(body_index: usize, epoch_day: f64) -> Self {
+        Self {
+            body_index,
+            epoch_day,
+        }
+    }
+}
+
+/// Pre-propagated states and parameters for one two-impulse Lambert transfer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LambertTransfer {
+    /// Cartesian departure state `[x, y, z, vx, vy, vz]` in SI units.
+    pub departure_state: [f64; 6],
+    /// Cartesian arrival state `[x, y, z, vx, vy, vz]` in SI units.
+    pub arrival_state: [f64; 6],
+    /// Time of flight in seconds.
+    pub tof_seconds: f64,
+    /// Central-body gravitational parameter in m³/s².
+    pub mu: f64,
+    /// Maximum number of complete revolutions to search.
+    pub maximum_revolutions: usize,
+}
+
+impl LambertTransfer {
+    /// Constructs a pre-propagated Lambert transfer.
+    #[must_use]
+    pub const fn new(
+        departure_state: [f64; 6],
+        arrival_state: [f64; 6],
+        tof_seconds: f64,
+        mu: f64,
+        maximum_revolutions: usize,
+    ) -> Self {
+        Self {
+            departure_state,
+            arrival_state,
+            tof_seconds,
+            mu,
+            maximum_revolutions,
+        }
+    }
+}
+
+/// Returns the best two-impulse delta-v over both Lambert directions.
+///
+/// `None` denotes invalid inputs or a geometry for which neither direction
+/// produces a finite solution.
+#[must_use]
+pub fn lambert_delta_v(transfer: &LambertTransfer) -> Option<f64> {
+    if !transfer
+        .departure_state
+        .iter()
+        .chain(&transfer.arrival_state)
+        .all(|value| value.is_finite())
+        || !transfer.tof_seconds.is_finite()
+        || transfer.tof_seconds <= 0.0
+        || !transfer.mu.is_finite()
+        || transfer.mu <= 0.0
+    {
+        return None;
+    }
+
+    let initial_position = [
+        transfer.departure_state[0],
+        transfer.departure_state[1],
+        transfer.departure_state[2],
+    ];
+    let final_position = [
+        transfer.arrival_state[0],
+        transfer.arrival_state[1],
+        transfer.arrival_state[2],
+    ];
+    let initial_velocity = [
+        transfer.departure_state[3],
+        transfer.departure_state[4],
+        transfer.departure_state[5],
+    ];
+    let final_velocity = [
+        transfer.arrival_state[3],
+        transfer.arrival_state[4],
+        transfer.arrival_state[5],
+    ];
+    let mut delta_v = f64::INFINITY;
+
+    for clockwise in [false, true] {
+        let Ok(lambert) = LambertProblem::new(
+            initial_position,
+            final_position,
+            transfer.tof_seconds,
+            transfer.mu,
+            clockwise,
+            transfer.maximum_revolutions,
+        ) else {
+            continue;
+        };
+        for solution in lambert.solutions() {
+            let departure_impulse = difference_norm(solution.departure_velocity, initial_velocity);
+            let arrival_impulse = difference_norm(solution.arrival_velocity, final_velocity);
+            delta_v = delta_v.min(departure_impulse + arrival_impulse);
+        }
+    }
+    delta_v.is_finite().then_some(delta_v)
+}
+
+/// Evaluates an ordered Lambert batch.
+///
+/// `workers = 1` is serial, values above one use exactly that many cached
+/// Rayon threads, and values at or below zero use the global Rayon pool.
+/// Output order always matches input order.
+#[must_use]
+pub fn lambert_delta_v_batch(transfers: &[LambertTransfer], workers: i32) -> Vec<Option<f64>> {
+    parallel_batch(transfers, workers, lambert_delta_v)
+}
+
 /// Self-contained fixed leg from body zero to body one of `easy.kttsp`.
 #[derive(Clone, Debug)]
 pub struct FixedLegProblem {
@@ -129,64 +255,123 @@ impl FixedLegProblem {
         })
     }
 
+    /// Propagates one embedded body.
+    ///
+    /// `None` denotes an invalid body index, non-finite epoch, or ephemeris
+    /// failure.
+    #[must_use]
+    pub fn propagate(&self, request: PropagationRequest) -> Option<[f64; 6]> {
+        if !request.epoch_day.is_finite() {
+            return None;
+        }
+        self.bodies
+            .get(request.body_index)?
+            .state(request.epoch_day)
+            .ok()
+    }
+
+    /// Propagates an ordered batch of body/epoch requests.
+    ///
+    /// `workers = 1` is serial, values above one use exactly that many cached
+    /// Rayon threads, and values at or below zero use the global Rayon pool.
+    /// Output order always matches input order.
+    #[must_use]
+    pub fn propagate_batch(
+        &self,
+        requests: &[PropagationRequest],
+        workers: i32,
+    ) -> Vec<Option<[f64; 6]>> {
+        parallel_batch(requests, workers, |request| self.propagate(*request))
+    }
+
+    /// Propagates both endpoints of one valid fixed-leg decision.
+    #[must_use]
+    pub fn transfer(&self, decision: Decision) -> Option<LambertTransfer> {
+        if !valid_decision(decision) {
+            return None;
+        }
+        let departure_day = decision.wait_days;
+        let arrival_day = departure_day + decision.tof_days;
+        let departure_state = self.propagate(PropagationRequest::new(0, departure_day))?;
+        let arrival_state = self.propagate(PropagationRequest::new(1, arrival_day))?;
+        Some(LambertTransfer::new(
+            departure_state,
+            arrival_state,
+            decision.tof_days * DAY_SECONDS,
+            MU_MOON,
+            MAXIMUM_REVOLUTIONS,
+        ))
+    }
+
     /// Evaluates a decision and returns all physical and objective values.
     ///
     /// `None` denotes a non-finite or out-of-bounds decision, an ephemeris
     /// failure, or a geometry for which neither Lambert direction succeeds.
     #[must_use]
     pub fn evaluate(&self, decision: Decision) -> Option<Evaluation> {
-        if !decision.wait_days.is_finite()
-            || !decision.tof_days.is_finite()
-            || !(0.0..=MAX_WAIT_DAYS).contains(&decision.wait_days)
-            || !(MIN_TOF_DAYS..=MAX_TOF_DAYS).contains(&decision.tof_days)
-        {
-            return None;
-        }
+        let transfer = self.transfer(decision)?;
+        let delta_v = lambert_delta_v(&transfer)?;
+        Some(evaluation_from_delta_v(decision, delta_v))
+    }
 
-        let departure_day = decision.wait_days;
-        let arrival_day = departure_day + decision.tof_days;
-        let departure = self.bodies[0].state(departure_day).ok()?;
-        let arrival = self.bodies[1].state(arrival_day).ok()?;
-        let initial_position = [departure[0], departure[1], departure[2]];
-        let final_position = [arrival[0], arrival[1], arrival[2]];
-        let initial_velocity = [departure[3], departure[4], departure[5]];
-        let final_velocity = [arrival[3], arrival[4], arrival[5]];
-        let mut delta_v = f64::INFINITY;
+    /// Evaluates a fixed-leg batch with staged parallelism.
+    ///
+    /// All departure and arrival ephemerides are propagated in one ordered
+    /// batch, followed by one ordered batch containing every valid Lambert
+    /// computation. Invalid inputs remain `None` at their original positions.
+    #[must_use]
+    pub fn evaluate_batch(&self, decisions: &[Decision], workers: i32) -> Vec<Option<Evaluation>> {
+        let propagation_requests = decisions
+            .iter()
+            .flat_map(|decision| {
+                if valid_decision(*decision) {
+                    [
+                        PropagationRequest::new(0, decision.wait_days),
+                        PropagationRequest::new(1, decision.wait_days + decision.tof_days),
+                    ]
+                } else {
+                    [
+                        PropagationRequest::new(0, f64::NAN),
+                        PropagationRequest::new(1, f64::NAN),
+                    ]
+                }
+            })
+            .collect::<Vec<_>>();
+        let states = self.propagate_batch(&propagation_requests, workers);
+        let transfers = decisions
+            .iter()
+            .enumerate()
+            .map(|(index, decision)| {
+                Some(LambertTransfer::new(
+                    states[index * 2]?,
+                    states[index * 2 + 1]?,
+                    decision.tof_days * DAY_SECONDS,
+                    MU_MOON,
+                    MAXIMUM_REVOLUTIONS,
+                ))
+            })
+            .collect::<Vec<_>>();
+        let delta_vs = parallel_batch(&transfers, workers, |transfer| {
+            transfer.as_ref().and_then(lambert_delta_v)
+        });
+        decisions
+            .iter()
+            .zip(delta_vs)
+            .map(|(decision, delta_v)| {
+                delta_v.map(|value| evaluation_from_delta_v(*decision, value))
+            })
+            .collect()
+    }
 
-        for clockwise in [false, true] {
-            let Ok(lambert) = LambertProblem::new(
-                initial_position,
-                final_position,
-                decision.tof_days * DAY_SECONDS,
-                MU_MOON,
-                clockwise,
-                MAXIMUM_REVOLUTIONS,
-            ) else {
-                continue;
-            };
-            for solution in lambert.solutions() {
-                let departure_impulse =
-                    difference_norm(solution.departure_velocity, initial_velocity);
-                let arrival_impulse = difference_norm(solution.arrival_velocity, final_velocity);
-                delta_v = delta_v.min(departure_impulse + arrival_impulse);
-            }
-        }
-        if !delta_v.is_finite() {
-            return None;
-        }
-
-        let excess_delta_v = (delta_v - DV_LIMIT).max(0.0);
-        let objective = arrival_day
-            + PENALTY_LINEAR * excess_delta_v
-            + PENALTY_QUADRATIC * excess_delta_v * excess_delta_v;
-        Some(Evaluation {
-            decision,
-            departure_day,
-            arrival_day,
-            delta_v,
-            excess_delta_v,
-            objective,
-        })
+    /// Returns scalar objectives for an ordered staged batch.
+    ///
+    /// Invalid rows use the same finite replacement as [`Objective`].
+    #[must_use]
+    pub fn objective_batch(&self, decisions: &[Decision], workers: i32) -> Vec<f64> {
+        self.evaluate_batch(decisions, workers)
+            .into_iter()
+            .map(|evaluation| evaluation.map_or(NAN_REPLACEMENT, |value| value.objective))
+            .collect()
     }
 
     /// Returns the scalar objective or the optimizer's finite replacement.
@@ -194,6 +379,30 @@ impl FixedLegProblem {
     pub fn objective(&self, decision: Decision) -> f64 {
         self.evaluate(decision)
             .map_or(NAN_REPLACEMENT, |evaluation| evaluation.objective)
+    }
+}
+
+fn valid_decision(decision: Decision) -> bool {
+    decision.wait_days.is_finite()
+        && decision.tof_days.is_finite()
+        && (0.0..=MAX_WAIT_DAYS).contains(&decision.wait_days)
+        && (MIN_TOF_DAYS..=MAX_TOF_DAYS).contains(&decision.tof_days)
+}
+
+fn evaluation_from_delta_v(decision: Decision, delta_v: f64) -> Evaluation {
+    let departure_day = decision.wait_days;
+    let arrival_day = departure_day + decision.tof_days;
+    let excess_delta_v = (delta_v - DV_LIMIT).max(0.0);
+    let objective = arrival_day
+        + PENALTY_LINEAR * excess_delta_v
+        + PENALTY_QUADRATIC * excess_delta_v * excess_delta_v;
+    Evaluation {
+        decision,
+        departure_day,
+        arrival_day,
+        delta_v,
+        excess_delta_v,
+        objective,
     }
 }
 
@@ -260,5 +469,65 @@ mod tests {
         assert!(problem.evaluate(Decision::new(-0.1, 1.0)).is_none());
         assert!(problem.evaluate(Decision::new(0.0, 0.0)).is_none());
         assert!(problem.evaluate(Decision::new(0.0, f64::NAN)).is_none());
+    }
+
+    #[test]
+    fn propagation_batch_matches_serial_and_preserves_order() {
+        let problem = FixedLegProblem::easy().unwrap();
+        let requests = [
+            PropagationRequest::new(0, 0.0),
+            PropagationRequest::new(1, 2.0),
+            PropagationRequest::new(0, 4.0),
+            PropagationRequest::new(2, 1.0),
+            PropagationRequest::new(1, f64::NAN),
+        ];
+        let serial = requests
+            .iter()
+            .map(|request| problem.propagate(*request))
+            .collect::<Vec<_>>();
+        assert_eq!(problem.propagate_batch(&requests, 3), serial);
+        assert!(serial[0].is_some());
+        assert!(serial[3].is_none());
+        assert!(serial[4].is_none());
+    }
+
+    #[test]
+    fn lambert_batch_matches_serial_and_preserves_order() {
+        let problem = FixedLegProblem::easy().unwrap();
+        let mut transfers = [
+            problem.transfer(Decision::new(0.0, 1.0)).unwrap(),
+            problem.transfer(Decision::new(1.0, 2.0)).unwrap(),
+            problem.transfer(Decision::new(2.0, 3.0)).unwrap(),
+        ];
+        transfers[1].tof_seconds = -1.0;
+        let serial = transfers.iter().map(lambert_delta_v).collect::<Vec<_>>();
+        assert_eq!(lambert_delta_v_batch(&transfers, 3), serial);
+        assert!(serial[0].is_some());
+        assert!(serial[1].is_none());
+        assert!(serial[2].is_some());
+    }
+
+    #[test]
+    fn staged_batch_matches_scalar_and_preserves_invalid_rows() {
+        let problem = FixedLegProblem::easy().unwrap();
+        let decisions = [
+            Decision::new(0.0, 1.0),
+            Decision::new(-1.0, 1.0),
+            Decision::new(1.0, 2.0),
+            Decision::new(12.0, 12.0),
+            Decision::new(0.0, f64::NAN),
+        ];
+        let serial = decisions
+            .iter()
+            .map(|decision| problem.evaluate(*decision))
+            .collect::<Vec<_>>();
+        assert_eq!(problem.evaluate_batch(&decisions, 3), serial);
+        assert_eq!(
+            problem.objective_batch(&decisions, 3),
+            serial
+                .into_iter()
+                .map(|value| value.map_or(NAN_REPLACEMENT, |result| result.objective))
+                .collect::<Vec<_>>()
+        );
     }
 }

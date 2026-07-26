@@ -54,6 +54,9 @@ The benchmark driver and table-creation workload are derived from real SpOC 4
 competition code used by team fcmaes, not from a toy standalone example. The
 measured paths therefore include the same kinds of objective, transfer-grid,
 and sparse-table loops that appear in competition search workflows.
+That SpOC 4 transfer-table experience motivated the deliberate batch extension
+maintained in
+[dietmarwo/pykep-lambert](https://github.com/dietmarwo/pykep-lambert).
 
 Two published Rust deployment paths are included:
 
@@ -246,24 +249,46 @@ The wheel backend is `2.38x` faster than original pykep in CMA ask/tell and
 `2.26x` faster in BiteOpt. Numba remains faster inside Python because it fuses
 population evaluation and avoids per-solution Python object materialization.
 
-## Native Rust Optimizer Results
+## Native Rust Batch And Optimizer Results
 
 The `rust/` executable removes the Python boundary and uses `fcmaes-core`
-directly. The following timings are medians of five warmed release-mode runs:
+directly. Its ordered batch layer deliberately extends the original scalar
+pykep behavior using the published scalar `pykep-core 0.1.1` building blocks.
+It separately batches every ephemeris propagation and every Lambert
+calculation, then composes them into a staged full-transfer batch.
+
+The following timings are medians of five warmed release-mode runs:
 
 | path | evals | seconds | evals/s | feasible | arrival | dv |
 |---|---:|---:|---:|---|---:|---:|
-| native fixed-leg objective | 32768 | 0.067663 | 484,279 | n/a | n/a | n/a |
-| native CMA-ES | 3808 | 0.003067 | 1,241,658 | True | 0.969180817 | 600.000000 |
-| native BiteOpt | 4096 | 0.005617 | 729,254 | True | 0.969180817 | 600.000000 |
+| propagation serial | 65536 | 0.009003 | 7,278,981 | n/a | n/a | n/a |
+| propagation batch, 8 workers | 65536 | 0.001205 | 54,381,577 | n/a | n/a | n/a |
+| Lambert serial | 32768 | 0.059876 | 547,264 | n/a | n/a | n/a |
+| Lambert batch, 8 workers | 32768 | 0.008068 | 4,061,278 | n/a | n/a | n/a |
+| full transfer serial | 32768 | 0.067504 | 485,426 | n/a | n/a | n/a |
+| full transfer batch, 8 workers | 32768 | 0.011397 | 2,875,181 | n/a | n/a | n/a |
+| native CMA-ES | 3808 | 0.002150 | 1,771,331 | True | 0.969180817 | 600.000000 |
+| native BiteOpt | 4096 | 0.005657 | 724,012 | True | 0.969180817 | 600.000000 |
+
+The native batch speedups are `7.47x` for propagation, `7.42x` for Lambert,
+and `5.92x` for the complete staged transfer. The executable verifies exact
+serial/batch output equality before printing each measurement.
 
 The native optimizer implementations are not byte-for-byte identical to the
 Python fcmaes wrappers, so evaluation counts can stop at slightly different
 points. They use the same two decision variables, bounds, 4,096 evaluation
 budget, seed, CMA population, Lambert branches, and penalty. Native CMA-ES
-delivered about `17.29x` the original-pykep Python throughput and `1.82x` the
+delivered about `24.66x` the original-pykep Python throughput and `2.60x` the
 Numba-backed Python throughput in this run; native BiteOpt delivered about
-`10.73x` and `2.30x`, respectively.
+`10.65x` and `2.28x`, respectively.
+
+Promising future batch surfaces are generic multi-provider ephemerides,
+Lambert direction/revolution/TOF grids, fused KTTSP or pork-chop tables,
+optimizer populations, robust Monte Carlo ensembles, transfer encodings,
+flyby constraints/Jacobians, MIMA estimates, and independent low-thrust leg
+constraints. The generic batch layer prepared for `pykep-core 0.1.2` exposes
+these patterns through the typed Python API. Scalar APIs remain preferable for
+tiny batches where scheduling overhead dominates.
 
 ## Notes
 

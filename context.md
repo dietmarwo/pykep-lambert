@@ -28,6 +28,12 @@ measurements. It also contains consumers for both pykep-rust distribution
 channels: a Python backend using the PyPI wheel and a standalone native crate
 using crates.io dependencies.
 
+Experience building the transfer table during the SpOC 4 competition
+motivated the deliberate batch extension maintained in
+`https://github.com/dietmarwo/pykep-lambert`. The Numba and local Rust batch
+entry points extend original scalar pykep behavior; do not describe them as
+API parity with original Python pykep.
+
 ## Dependencies
 
 The benchmark expects:
@@ -192,6 +198,24 @@ Low-level kernels in `pk_lambert.py`:
 
 Use `numba.set_num_threads()` through the helper in the benchmark when timing.
 Do not assume all machines benefit from the same thread count.
+
+Native APIs in `rust/src/lib.rs`:
+
+- `FixedLegProblem::propagate` and `propagate_batch`
+  Scalar and ordered parallel body/epoch propagation.
+- `lambert_delta_v` and `lambert_delta_v_batch`
+  Scalar and ordered parallel Lambert evaluation from propagated states.
+- `FixedLegProblem::evaluate_batch`
+  Staged full-transfer evaluation: one parallel propagation batch followed by
+  one parallel batch of every valid Lambert case.
+- `FixedLegProblem::objective_batch`
+  Ordered optimizer-ready objectives with finite replacement for invalid rows.
+
+The Rust batch helpers use `fcmaes_core::parallel_batch`: one worker is serial,
+positive values select an exact cached Rayon pool size, and non-positive values
+use the global Rayon pool. Results preserve input order. This is currently a
+project-level layer over published scalar `pykep-core 0.1.1`. The experiment
+motivated the generic batch layer prepared for `pykep-core 0.1.2`.
 
 ## Optimization Patterns
 
@@ -404,9 +428,11 @@ optimizer:
   BiteOpt numba: 317641.9 eval/s
 
 native Rust (median of five warmed release runs):
-  fixed-leg objective: 484279 eval/s
-  CMA: 1241658 eval/s
-  BiteOpt: 729254 eval/s
+  propagation serial / batch 8: 7278981 / 54381577 states/s
+  Lambert serial / batch 8: 547264 / 4061278 solves/s
+  full transfer serial / batch 8: 485426 / 2875181 eval/s
+  CMA: 1771331 eval/s
+  BiteOpt: 724012 eval/s
 ```
 
 ## Extending The Code
@@ -441,6 +467,25 @@ When adding a new Numba kernel:
 - Use `None` in JSON for unavailable values; do not serialize `NaN` in JSON.
 - Keep a pykep numerical validation path.
 
+When adding a native Rust batch:
+
+- preserve row order and per-row failure status;
+- compare every output against the scalar path before timing;
+- warm the selected cached worker pool before timing;
+- report both item count and worker count;
+- keep allocation and intermediate materialization outside the timed region
+  unless they are intrinsic to the public API;
+- retain a serial path because small batches may not amortize scheduling; and
+- prefer fused transfer-table or optimizer-population kernels when
+  intermediate arrays dominate.
+
+Good future batch candidates include generic ephemerides across providers,
+Lambert direction/revolution/TOF grids, KTTSP and pork-chop tables, optimizer
+populations, robust Monte Carlo ensembles, transfer encodings, flyby
+constraints/Jacobians, MIMA estimates, and independent low-thrust leg
+constraints. A Python binding should accept contiguous NumPy arrays and
+release the GIL once per native batch.
+
 ## Common Pitfalls
 
 - Do not assume current working directory. Defaults are script-relative.
@@ -455,6 +500,9 @@ When adding a new Numba kernel:
 - Do not trust a single very small batch timing; Numba thread scheduling
   overhead dominates tiny batches.
 - Do not assume 8 or 16 threads are optimal on another CPU.
+- Do not call nested native batch pools from an already parallel optimizer
+  without assigning a single owner to each core.
+- Do not claim original pykep exposes these project-specific batch APIs.
 
 ## Recommended Verification After Changes
 

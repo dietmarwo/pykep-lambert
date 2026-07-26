@@ -5,6 +5,9 @@ tooling to compare it against the original pykep implementation, the published
 `pykep-rust` Python wheel, and a standalone native Rust consumer.
 
 See the related post [Lunar Tomato War](https://www.linkedin.com/pulse/algorithms-ai-lunar-tomato-war-final-debrief-from-esas-wolz-qbxle).
+Experience building the transfer table during the SpOC 4 competition motivated
+the parallel batch extension developed in
+[dietmarwo/pykep-lambert](https://github.com/dietmarwo/pykep-lambert).
 
 ## Main Result
 
@@ -32,9 +35,47 @@ the Python API boundary:
 | Numba batch 8 | 32,768 | 0.016178 | 2,025,427.4 | 51.90x |
 
 The native `rust/` consumer uses the crates.io releases directly. Across five
-release-mode runs, median fixed-leg objective throughput was `484,279 eval/s`;
-native CMA-ES and BiteOpt reached `1,241,658` and `729,254 eval/s`,
-respectively.
+release-mode runs, median serial and eight-worker batch full-transfer
+throughput reached `485,426` and `2,875,181 eval/s`; native CMA-ES and BiteOpt
+reached `1,771,331` and `724,012 eval/s`, respectively.
+
+The Rust consumer now deliberately extends the original scalar pykep model
+with ordered native batches. With 32,768 transfers and eight worker threads,
+five release-mode runs produced these medians on the same benchmark host:
+
+| Rust stage | serial items/s | batch items/s | batch speedup |
+|---|---:|---:|---:|
+| Keplerian propagation | 7,278,981 | 54,381,577 | 7.47x |
+| Lambert evaluation | 547,264 | 4,061,278 | 7.42x |
+| full propagation + Lambert + objective | 485,426 | 2,875,181 | 5.92x |
+
+These are ordered, numerically identical batches. The full path first
+propagates every departure and arrival state in parallel and then evaluates
+every valid Lambert transfer in parallel. This is a project-level extension
+built on the published scalar `pykep-core 0.1.1` APIs, not a claim that the
+original Python pykep API provides native batching.
+
+## Where Native Batching Also Makes Sense
+
+The same pattern is useful whenever one call supplies enough independent work
+to amortize scheduling and allocation:
+
+- KTTSP transfer-table generation over all body pairs, departure epochs, and
+  times of flight;
+- pork-chop plots and launch-window scans;
+- propagation of one body at many epochs or many bodies at shared epochs;
+- Lambert sweeps over time of flight, direction, and revolution count;
+- complete CMA-ES, DE, PGPE, and MODE populations;
+- Monte Carlo trajectory ensembles and robust/worst-case objective scenarios;
+- transfer encodings, flyby constraints/Jacobians, and MIMA estimates; and
+- low-thrust leg mismatch/constraint evaluation across independent legs or
+  candidates.
+
+This experiment motivated the generic ordered batch layer prepared for
+`pykep-core 0.1.2`. The benchmark remains pinned to published
+`pykep-core 0.1.1` so its recorded measurements are reproducible. Scalar APIs
+remain useful: tiny batches can be slower because thread scheduling and
+intermediate arrays dominate.
 
 ## Files
 
@@ -47,7 +88,8 @@ respectively.
 - `benchmark_numba_lambert.py`: solver, transfer, table-creation, and fcmaes
   optimizer benchmarks for pykep, `pykep-rust`, and Numba.
 - `test_pykep_rust_transfer.py`: installed-wheel integration and parity test.
-- `rust/`: standalone native benchmark using crates.io `pykep-core 0.1.1` and
+- `rust/`: standalone native benchmark and ordered parallel propagation,
+  Lambert, and full-transfer batch APIs using crates.io `pykep-core 0.1.1` and
   `fcmaes-core 0.1.3`, with no path dependencies.
 - `NUMBA_LAMBERT_BENCHMARKS.md`: derivation notes, benchmark numbers, and
   interpretation.

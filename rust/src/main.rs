@@ -10,8 +10,9 @@ use std::time::Instant;
 
 use fcmaes_core::{BiteParams, Cmaes, CmaesParams, Fitness, optimize_bite};
 use pykep_lambert_rust::{
-    DV_LIMIT, DV_TOLERANCE, Decision, Evaluation, FixedLegProblem, MAX_TOF_DAYS, MAX_WAIT_DAYS,
-    MIN_TOF_DAYS, SOURCE_COMMIT,
+    DAY_SECONDS, DV_LIMIT, DV_TOLERANCE, Decision, Evaluation, FixedLegProblem, LambertTransfer,
+    MAX_TOF_DAYS, MAX_WAIT_DAYS, MAXIMUM_REVOLUTIONS, MIN_TOF_DAYS, MU_MOON, PropagationRequest,
+    SOURCE_COMMIT, lambert_delta_v_batch,
 };
 
 const DEFAULT_OBJECTIVE_EVALUATIONS: usize = 32_768;
@@ -121,7 +122,7 @@ fn print_help() {
          \n  --objective-evaluations N  Raw objective calls (32768)\n\
          \n  --optimizer-evaluations N  Budget per optimizer (4096)\n\
          \n  --optimizer NAME           cma, bite, or both (both)\n\
-         \n  --workers N                CMA objective workers (8)\n\
+         \n  --workers N                Batch and CMA objective workers (8)\n\
          \n  --seed N                   Deterministic optimizer/sample seed (12345)"
     );
 }
@@ -135,25 +136,131 @@ struct OptimizationReport {
     evaluation: Evaluation,
 }
 
-fn benchmark_objective(problem: &FixedLegProblem, evaluations: usize, seed: u64) {
-    let _ = black_box(problem.objective(sample_decision(0, seed)));
+fn timed<T>(call: impl FnOnce() -> T) -> (f64, T) {
     let started = Instant::now();
-    let mut checksum = 0.0;
-    let mut best = f64::INFINITY;
-    for index in 0..evaluations {
-        let value = black_box(problem.objective(sample_decision(index as u64, seed)));
-        checksum += value;
-        best = best.min(value);
-    }
-    let seconds = started.elapsed().as_secs_f64();
+    let result = call();
+    (started.elapsed().as_secs_f64(), result)
+}
+
+fn print_stage(stage: &str, mode: &str, workers: i32, values: &[f64], seconds: f64) {
+    let checksum = values.iter().sum::<f64>();
+    let best = values.iter().copied().fold(f64::INFINITY, f64::min);
     println!(
-        "OBJECTIVE evaluations={} best={:.12} checksum={:.12e} seconds={:.6} \
-         evaluations_per_second={:.3}",
-        evaluations,
+        "BATCH stage={} mode={} workers={} items={} best={:.12} checksum={:.12e} \
+         seconds={:.6} items_per_second={:.3}",
+        stage,
+        mode,
+        workers,
+        values.len(),
         best,
         checksum,
         seconds,
-        evaluations as f64 / seconds
+        values.len() as f64 / seconds
+    );
+}
+
+fn benchmark_batches(problem: &FixedLegProblem, evaluations: usize, workers: i32, seed: u64) {
+    let decisions = (0..evaluations)
+        .map(|index| sample_decision(index as u64, seed))
+        .collect::<Vec<_>>();
+    let propagation_requests = decisions
+        .iter()
+        .flat_map(|decision| {
+            [
+                PropagationRequest::new(0, decision.wait_days),
+                PropagationRequest::new(1, decision.wait_days + decision.tof_days),
+            ]
+        })
+        .collect::<Vec<_>>();
+
+    let warm_propagations = propagation_requests.len().min(64);
+    let _ = black_box(problem.propagate_batch(&propagation_requests[..warm_propagations], workers));
+    let (propagation_serial_seconds, propagation_serial) =
+        timed(|| problem.propagate_batch(black_box(&propagation_requests), 1));
+    let (propagation_parallel_seconds, propagation_parallel) =
+        timed(|| problem.propagate_batch(black_box(&propagation_requests), workers));
+    assert_eq!(propagation_parallel, propagation_serial);
+    let propagation_checksums = propagation_serial
+        .iter()
+        .map(|state| {
+            state
+                .as_ref()
+                .expect("sample propagation must succeed")
+                .iter()
+                .sum::<f64>()
+        })
+        .collect::<Vec<_>>();
+    print_stage(
+        "propagation",
+        "serial",
+        1,
+        &propagation_checksums,
+        propagation_serial_seconds,
+    );
+    print_stage(
+        "propagation",
+        "parallel",
+        workers,
+        &propagation_checksums,
+        propagation_parallel_seconds,
+    );
+
+    let transfers = decisions
+        .iter()
+        .zip(propagation_serial.chunks_exact(2))
+        .map(|(decision, states)| {
+            LambertTransfer::new(
+                states[0].expect("departure propagation must succeed"),
+                states[1].expect("arrival propagation must succeed"),
+                decision.tof_days * DAY_SECONDS,
+                MU_MOON,
+                MAXIMUM_REVOLUTIONS,
+            )
+        })
+        .collect::<Vec<_>>();
+    let warm_lambert = transfers.len().min(32);
+    let _ = black_box(lambert_delta_v_batch(&transfers[..warm_lambert], workers));
+    let (lambert_serial_seconds, lambert_serial) =
+        timed(|| lambert_delta_v_batch(black_box(&transfers), 1));
+    let (lambert_parallel_seconds, lambert_parallel) =
+        timed(|| lambert_delta_v_batch(black_box(&transfers), workers));
+    assert_eq!(lambert_parallel, lambert_serial);
+    let delta_vs = lambert_serial
+        .into_iter()
+        .map(|value| value.expect("sample Lambert solve must succeed"))
+        .collect::<Vec<_>>();
+    print_stage("lambert", "serial", 1, &delta_vs, lambert_serial_seconds);
+    print_stage(
+        "lambert",
+        "parallel",
+        workers,
+        &delta_vs,
+        lambert_parallel_seconds,
+    );
+
+    let _ = black_box(problem.objective_batch(&decisions[..decisions.len().min(32)], workers));
+    let (objective_serial_seconds, objective_serial) = timed(|| {
+        decisions
+            .iter()
+            .map(|decision| black_box(problem.objective(*decision)))
+            .collect::<Vec<_>>()
+    });
+    let (objective_parallel_seconds, objective_parallel) =
+        timed(|| problem.objective_batch(black_box(&decisions), workers));
+    assert_eq!(objective_parallel, objective_serial);
+    print_stage(
+        "full_transfer",
+        "serial",
+        1,
+        &objective_serial,
+        objective_serial_seconds,
+    );
+    print_stage(
+        "full_transfer",
+        "parallel",
+        workers,
+        &objective_serial,
+        objective_parallel_seconds,
     );
 }
 
@@ -267,7 +374,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!(
         "CONFIG source_commit={} pykep_core=0.1.1 fcmaes_core=0.1.3 \
          objective_evaluations={} optimizer_evaluations={} optimizer={:?} \
-         cma_population={} cma_workers={} seed={} dv_limit={}",
+         cma_population={} workers={} seed={} dv_limit={}",
         SOURCE_COMMIT,
         args.objective_evaluations,
         args.optimizer_evaluations,
@@ -277,7 +384,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         args.seed,
         DV_LIMIT
     );
-    benchmark_objective(&problem, args.objective_evaluations, args.seed);
+    benchmark_batches(
+        &problem,
+        args.objective_evaluations,
+        args.workers,
+        args.seed,
+    );
     if matches!(args.optimizer, Optimizer::Cma | Optimizer::Both) {
         print_optimizer(&run_cma(
             &problem,
