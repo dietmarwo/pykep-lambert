@@ -1,0 +1,23 @@
+[package]
+name = "pykep-lambert-rust"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MPL-2.0"
+description = "Native KTTSP Lambert optimization benchmark."
+publish = false
+
+[dependencies]
+fcmaes-core = "=0.1.3"
+pykep-core = "=0.1.1"
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

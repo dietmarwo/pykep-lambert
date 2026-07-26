@@ -42,6 +42,11 @@ DEFAULT_JSON_OUT = SCRIPT_DIR / "results" / "benchmark_latest.json"
 
 import pk_lambert as pl
 from numba_transfer import NumbaTransfer
+from pykep_rust_transfer import (
+    PYKEP_RUST_VERSION,
+    PykepRustTransfer,
+    pykep_rust_lambert_dv,
+)
 from utils_users import TomatoProblem
 
 
@@ -292,6 +297,12 @@ def _benchmark_lambert(args, problem, numba_transfer, lambert_arrays):
         lambda: np.asarray([_pykep_lambert_dv(case) for case in cases], dtype=np.float64)
     )
     dt_pykep_batch, pykep_batch = _pool_map(_pykep_lambert_dv, cases, args.workers)
+    dt_pykep_rust_serial, pykep_rust_serial = _time_call(
+        lambda: np.asarray(
+            [pykep_rust_lambert_dv(case) for case in cases],
+            dtype=np.float64,
+        )
+    )
 
     old, _ = _set_threads(1)
     try:
@@ -339,14 +350,23 @@ def _benchmark_lambert(args, problem, numba_transfer, lambert_arrays):
         "results": [
             _bench_row("lambert", "pykep serial", n, dt_pykep_serial, 1.0),
             _bench_row("lambert", f"pykep batch {args.workers}", n, dt_pykep_batch, dt_pykep_serial / dt_pykep_batch),
+            _bench_row("lambert", "pykep-rust wheel serial", n, dt_pykep_rust_serial, dt_pykep_serial / dt_pykep_rust_serial),
             _bench_row("lambert", "numba serial", n, dt_numba_serial, dt_pykep_serial / dt_numba_serial),
             _bench_row("lambert", f"numba batch {numba_threads}", n, dt_numba_batch, dt_pykep_serial / dt_numba_batch),
         ],
-        "correctness": _correctness(pykep_serial, numba_serial, extra={"pykep_batch_max_abs": _max_abs(pykep_serial, pykep_batch), "numba_batch_max_abs": _max_abs(numba_serial, numba_batch)}),
+        "correctness": _correctness(
+            pykep_serial,
+            numba_serial,
+            extra={
+                "pykep_batch_max_abs": _max_abs(pykep_serial, pykep_batch),
+                "numba_batch_max_abs": _max_abs(numba_serial, numba_batch),
+                "pykep_rust": _correctness(pykep_serial, pykep_rust_serial),
+            },
+        ),
     }
 
 
-def _benchmark_compute_transfer(args, problem, numba_transfer, rows):
+def _benchmark_compute_transfer(args, problem, numba_transfer, pykep_rust_transfer, rows):
     n = len(rows)
 
     dt_pykep_serial, pykep_serial = _time_call(
@@ -358,6 +378,12 @@ def _benchmark_compute_transfer(args, problem, numba_transfer, rows):
         args.workers,
         initializer=_init_problem_worker,
         initargs=(str(args.problem), _max_revs_arg(args.max_revs)),
+    )
+    dt_pykep_rust_serial, pykep_rust_serial = _time_call(
+        lambda: np.asarray(
+            pykep_rust_transfer.compute_transfer_batch(rows),
+            dtype=np.float64,
+        )
     )
 
     old, _ = _set_threads(1)
@@ -381,10 +407,19 @@ def _benchmark_compute_transfer(args, problem, numba_transfer, rows):
         "results": [
             _bench_row("compute_transfer", "pykep serial", n, dt_pykep_serial, 1.0),
             _bench_row("compute_transfer", f"pykep batch {args.workers}", n, dt_pykep_batch, dt_pykep_serial / dt_pykep_batch),
+            _bench_row("compute_transfer", "pykep-rust wheel serial", n, dt_pykep_rust_serial, dt_pykep_serial / dt_pykep_rust_serial),
             _bench_row("compute_transfer", "numba serial", n, dt_numba_serial, dt_pykep_serial / dt_numba_serial),
             _bench_row("compute_transfer", f"numba batch {numba_threads}", n, dt_numba_batch, dt_pykep_serial / dt_numba_batch),
         ],
-        "correctness": _correctness(pykep_serial, numba_serial, extra={"pykep_batch_max_abs": _max_abs(pykep_serial, pykep_batch), "numba_batch_max_abs": _max_abs(numba_serial, numba_batch_values)}),
+        "correctness": _correctness(
+            pykep_serial,
+            numba_serial,
+            extra={
+                "pykep_batch_max_abs": _max_abs(pykep_serial, pykep_batch),
+                "numba_batch_max_abs": _max_abs(numba_serial, numba_batch_values),
+                "pykep_rust": _correctness(pykep_serial, pykep_rust_serial),
+            },
+        ),
     }
 
 
@@ -804,9 +839,10 @@ def _benchmark_table_creation(args, problem, numba_transfer):
 
 
 class TransferEvaluator:
-    def __init__(self, problem, numba_transfer, backend: str):
+    def __init__(self, problem, numba_transfer, pykep_rust_transfer, backend: str):
         self.problem = problem
         self.numba_transfer = numba_transfer
+        self.pykep_rust_transfer = pykep_rust_transfer
         self.backend = backend
 
     def compute_batch(self, transfers):
@@ -817,6 +853,8 @@ class TransferEvaluator:
             ]
         if self.backend == "numba":
             return self.numba_transfer.compute_transfer_batch(transfers)
+        if self.backend == "pykep-rust":
+            return self.pykep_rust_transfer.compute_transfer_batch(transfers)
         raise ValueError(f"unknown backend: {self.backend}")
 
 
@@ -831,8 +869,19 @@ def _record_best(info, *, best_seen, best_feasible, dv_tol: float):
     return best_seen, best_feasible
 
 
-def _optimize_leg_ask_tell(args, problem, numba_transfer, backend: str):
-    evaluator = TransferEvaluator(problem, numba_transfer, backend)
+def _optimize_leg_ask_tell(
+    args,
+    problem,
+    numba_transfer,
+    pykep_rust_transfer,
+    backend: str,
+):
+    evaluator = TransferEvaluator(
+        problem,
+        numba_transfer,
+        pykep_rust_transfer,
+        backend,
+    )
     lower = np.array([0.0, float(problem.min_tof)], dtype=np.float64)
     upper = np.array([float(args.opt_max_wait), float(args.opt_max_tof)], dtype=np.float64)
     x0 = np.array([0.5 * upper[0], 0.5 * (lower[1] + upper[1])], dtype=np.float64)
@@ -969,7 +1018,7 @@ def _optimize_leg_ask_tell(args, problem, numba_transfer, backend: str):
     }
 
 
-def _optimize_leg(args, problem, numba_transfer, backend: str):
+def _optimize_leg(args, problem, numba_transfer, pykep_rust_transfer, backend: str):
     """BiteOpt optimizer path using ``minimize(fun, bounds)``.
 
     This avoids the ask/tell population loop. The Numba backend uses a scalar
@@ -981,6 +1030,12 @@ def _optimize_leg(args, problem, numba_transfer, backend: str):
     x0 = np.array([0.5 * upper[0], 0.5 * (lower[1] + upper[1])], dtype=np.float64)
     bounds = Bounds(lower, upper)
     rng = np.random.default_rng(int(args.seed))
+    evaluator = TransferEvaluator(
+        problem,
+        numba_transfer,
+        pykep_rust_transfer,
+        backend,
+    )
 
     best_seen = None
     best_feasible = None
@@ -1039,7 +1094,11 @@ def _optimize_leg(args, problem, numba_transfer, backend: str):
             return 1.0e30
         if tof < lower[1] - 1e-12 or tof > upper[1] + 1e-12:
             return 1.0e30
-        dv = float(problem.compute_transfer(int(args.opt_from), int(args.opt_to), dep, tof))
+        dv = float(
+            evaluator.compute_batch(
+                [(int(args.opt_from), int(args.opt_to), dep, tof)]
+            )[0]
+        )
         if not math.isfinite(dv):
             return 1.0e30
         excess = max(0.0, dv - float(args.opt_dv_limit))
@@ -1077,7 +1136,7 @@ def _optimize_leg(args, problem, numba_transfer, backend: str):
     }
 
 
-def _run_optimization(args, problem, numba_transfer):
+def _run_optimization(args, problem, numba_transfer, pykep_rust_transfer):
     old, numba_threads = _set_threads(args.workers)
     try:
         warm_xs = np.column_stack((
@@ -1109,10 +1168,24 @@ def _run_optimization(args, problem, numba_transfer):
             penalty_linear=float(args.opt_penalty_linear),
             penalty_quad=float(args.opt_penalty_quad),
         )
-        pykep_cma = _optimize_leg_ask_tell(args, problem, numba_transfer, "pykep")
-        numba_cma = _optimize_leg_ask_tell(args, problem, numba_transfer, "numba")
-        pykep_bite = _optimize_leg(args, problem, numba_transfer, "pykep")
-        numba_bite = _optimize_leg(args, problem, numba_transfer, "numba")
+        pykep_cma = _optimize_leg_ask_tell(
+            args, problem, numba_transfer, pykep_rust_transfer, "pykep"
+        )
+        pykep_rust_cma = _optimize_leg_ask_tell(
+            args, problem, numba_transfer, pykep_rust_transfer, "pykep-rust"
+        )
+        numba_cma = _optimize_leg_ask_tell(
+            args, problem, numba_transfer, pykep_rust_transfer, "numba"
+        )
+        pykep_bite = _optimize_leg(
+            args, problem, numba_transfer, pykep_rust_transfer, "pykep"
+        )
+        pykep_rust_bite = _optimize_leg(
+            args, problem, numba_transfer, pykep_rust_transfer, "pykep-rust"
+        )
+        numba_bite = _optimize_leg(
+            args, problem, numba_transfer, pykep_rust_transfer, "numba"
+        )
     finally:
         set_num_threads(old)
     return {
@@ -1129,7 +1202,14 @@ def _run_optimization(args, problem, numba_transfer):
             "bite_m": int(args.bite_m),
             "max_evals": int(args.optimizer_evals),
         },
-        "results": [pykep_cma, numba_cma, pykep_bite, numba_bite],
+        "results": [
+            pykep_cma,
+            pykep_rust_cma,
+            numba_cma,
+            pykep_bite,
+            pykep_rust_bite,
+            numba_bite,
+        ],
     }
 
 
@@ -1230,14 +1310,27 @@ def main():
     max_revs = _max_revs_arg(args.max_revs)
     problem = TomatoProblem(str(args.problem), max_revs=max_revs)
     numba_transfer = NumbaTransfer(problem)
+    pykep_rust_transfer = PykepRustTransfer(problem)
     rows = _generate_transfer_rows(problem, int(args.samples), float(args.tof_max), int(args.seed))
     lambert_arrays = _prepare_lambert_cases(problem, numba_transfer, rows)
     _warm_numba(numba_transfer, rows, lambert_arrays)
+    pykep_rust_transfer.compute_transfer(*rows[0])
 
     lambert = _benchmark_lambert(args, problem, numba_transfer, lambert_arrays)
-    compute_transfer = _benchmark_compute_transfer(args, problem, numba_transfer, rows)
+    compute_transfer = _benchmark_compute_transfer(
+        args,
+        problem,
+        numba_transfer,
+        pykep_rust_transfer,
+        rows,
+    )
     table_creation = _benchmark_table_creation(args, problem, numba_transfer)
-    optimization = _run_optimization(args, problem, numba_transfer)
+    optimization = _run_optimization(
+        args,
+        problem,
+        numba_transfer,
+        pykep_rust_transfer,
+    )
 
     payload = {
         "meta": {
@@ -1251,6 +1344,7 @@ def main():
             "optimizer_popsize": int(args.opt_popsize),
             "python": sys.version.split()[0],
             "pykep": getattr(pk, "__version__", "unknown"),
+            "pykep_rust": PYKEP_RUST_VERSION,
         },
         "lambert": lambert,
         "compute_transfer": compute_transfer,

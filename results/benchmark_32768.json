@@ -16,7 +16,8 @@
     "pykep": {
       "major": 2,
       "minor": 6
-    }
+    },
+    "pykep_rust": "0.1.1"
   },
   "lambert": {
     "numba_threads": 8,
@@ -25,33 +26,41 @@
         "section": "lambert",
         "mode": "pykep serial",
         "samples": 32768,
-        "seconds": 0.839604215027066,
-        "calls_per_second": 39027.912692105376,
+        "seconds": 0.8348087120102718,
+        "calls_per_second": 39252.10593585277,
         "speedup_vs_pykep_serial": 1.0
       },
       {
         "section": "lambert",
         "mode": "pykep batch 8",
         "samples": 32768,
-        "seconds": 0.18261878899647854,
-        "calls_per_second": 179433.89166068705,
-        "speedup_vs_pykep_serial": 4.597578483795861
+        "seconds": 0.1903628900181502,
+        "calls_per_second": 172134.39025261553,
+        "speedup_vs_pykep_serial": 4.3853542669512775
+      },
+      {
+        "section": "lambert",
+        "mode": "pykep-rust wheel serial",
+        "samples": 32768,
+        "seconds": 0.35127077699871734,
+        "calls_per_second": 93284.16180808474,
+        "speedup_vs_pykep_serial": 2.376539031065827
       },
       {
         "section": "lambert",
         "mode": "numba serial",
         "samples": 32768,
-        "seconds": 0.06258004400297068,
-        "calls_per_second": 523617.4010750855,
-        "speedup_vs_pykep_serial": 13.416484893925768
+        "seconds": 0.06203356402693316,
+        "calls_per_second": 528230.1688449351,
+        "speedup_vs_pykep_serial": 13.45737142634304
       },
       {
         "section": "lambert",
         "mode": "numba batch 8",
         "samples": 32768,
-        "seconds": 0.0074173969915136695,
-        "calls_per_second": 4417722.286873718,
-        "speedup_vs_pykep_serial": 113.19391640863593
+        "seconds": 0.007784460962284356,
+        "calls_per_second": 4209411.564751968,
+        "speedup_vs_pykep_serial": 107.2404005948405
       }
     ],
     "correctness": {
@@ -60,7 +69,13 @@
       "mean_abs_dv_m_s": 5.126010293315941e-14,
       "max_rel": 1.7903088754118263e-14,
       "pykep_batch_max_abs": 0.0,
-      "numba_batch_max_abs": 0.0
+      "numba_batch_max_abs": 0.0,
+      "pykep_rust": {
+        "finite_compared": 32768,
+        "max_abs_dv_m_s": 6.230038707144558e-11,
+        "mean_abs_dv_m_s": 2.3796586988249213e-13,
+        "max_rel": 4.732783496926049e-14
+      }
     }
   },
   "compute_transfer": {
@@ -70,33 +85,41 @@
         "section": "compute_transfer",
         "mode": "pykep serial",
         "samples": 32768,
-        "seconds": 0.8459578910260461,
-        "calls_per_second": 38734.788513239495,
+        "seconds": 0.8396840659552254,
+        "calls_per_second": 39024.20127827851,
         "speedup_vs_pykep_serial": 1.0
       },
       {
         "section": "compute_transfer",
         "mode": "pykep batch 8",
         "samples": 32768,
-        "seconds": 0.12076077199890278,
-        "calls_per_second": 271346.3938463206,
-        "speedup_vs_pykep_serial": 7.005237520622445
+        "seconds": 0.11235516599845141,
+        "calls_per_second": 291646.58081188396,
+        "speedup_vs_pykep_serial": 7.4734798217181995
+      },
+      {
+        "section": "compute_transfer",
+        "mode": "pykep-rust wheel serial",
+        "samples": 32768,
+        "seconds": 0.3061096169985831,
+        "calls_per_second": 107046.6204926573,
+        "speedup_vs_pykep_serial": 2.743082932801527
       },
       {
         "section": "compute_transfer",
         "mode": "numba serial",
         "samples": 32768,
-        "seconds": 0.10620549999293871,
-        "calls_per_second": 308533.927171179,
-        "speedup_vs_pykep_serial": 7.965292673941475
+        "seconds": 0.10563322401139885,
+        "calls_per_second": 310205.4330601896,
+        "speedup_vs_pykep_serial": 7.949052713421066
       },
       {
         "section": "compute_transfer",
         "mode": "numba batch 8",
         "samples": 32768,
-        "seconds": 0.016109647986013442,
-        "calls_per_second": 2034060.584591886,
-        "speedup_vs_pykep_serial": 52.51250007203852
+        "seconds": 0.016178313991986215,
+        "calls_per_second": 2025427.372483396,
+        "speedup_vs_pykep_serial": 51.901827741206866
       }
     ],
     "correctness": {
@@ -105,11 +128,18 @@
       "mean_abs_dv_m_s": 1.7450147126981189e-10,
       "max_rel": 1.6662656465202954e-10,
       "pykep_batch_max_abs": 0.0,
-      "numba_batch_max_abs": 0.0
+      "numba_batch_max_abs": 0.0,
+      "pykep_rust": {
+        "finite_compared": 32768,
+        "max_abs_dv_m_s": 3.1397348720929585e-07,
+        "mean_abs_dv_m_s": 4.4653163287712745e-10,
+        "max_rel": 1.5170505910298076e-10
+      }
     }
   },
   "table_creation": {
     "numba_threads": 16,
+    "pykep_workers": null,
     "settings": {
       "cluster": "all",
       "target_max_time": 200.0,
@@ -163,8 +193,8 @@
         "section": "table_creation",
         "mode": "numba table batch 16",
         "samples": 10709178,
-        "seconds": 1.8733327049994841,
-        "calls_per_second": 5716644.977915415,
+        "seconds": 1.8735073520219885,
+        "calls_per_second": 5716112.076337511,
         "speedup_vs_pykep_serial": null,
         "retained_cells": 175150,
         "nonempty_pairs": 301,
@@ -205,80 +235,120 @@
       {
         "backend": "pykep",
         "optimizer": "cma_ask_tell",
-        "seconds": 0.056767023022985086,
-        "evals": 3812,
-        "evals_per_second": 67151.66300787895,
+        "seconds": 0.0553014519973658,
+        "evals": 3972,
+        "evals_per_second": 71824.5155694863,
         "feasible": true,
         "best": {
           "wait": 0.0,
-          "tof": 0.9691808170778735,
+          "tof": 0.9691808170764498,
           "departure": 0.0,
-          "arrival": 0.9691808170778735,
-          "dv": 600.0000000967268,
-          "excess": 9.672680789662991e-08
+          "arrival": 0.9691808170764498,
+          "dv": 600.0000000997119,
+          "excess": 9.971188319468638e-08
         },
         "stop": 2,
-        "result_fun": 0.9691808171241005,
+        "result_fun": 0.9691808171253182,
+        "result_success": true,
+        "result_status": 2
+      },
+      {
+        "backend": "pykep-rust",
+        "optimizer": "cma_ask_tell",
+        "seconds": 0.023186260019429028,
+        "evals": 3972,
+        "evals_per_second": 171308.35230311594,
+        "feasible": true,
+        "best": {
+          "wait": 0.0,
+          "tof": 0.9691808170764498,
+          "departure": 0.0,
+          "arrival": 0.9691808170764498,
+          "dv": 600.0000000997118,
+          "excess": 9.971176950784866e-08
+        },
+        "stop": 2,
+        "result_fun": 0.9691808171253182,
         "result_success": true,
         "result_status": 2
       },
       {
         "backend": "numba",
         "optimizer": "cma_ask_tell",
-        "seconds": 0.009993664018111303,
-        "evals": 3876,
-        "evals_per_second": 387845.73835738405,
+        "seconds": 0.005820714985020459,
+        "evals": 3972,
+        "evals_per_second": 682390.3953761514,
         "feasible": true,
         "best": {
           "wait": 0.0,
-          "tof": 0.9691808170780165,
+          "tof": 0.9691808170764498,
           "departure": 0.0,
-          "arrival": 0.9691808170780166,
-          "dv": 600.0000000964272,
-          "excess": 9.642724307923345e-08
+          "arrival": 0.9691808170764498,
+          "dv": 600.000000099712,
+          "excess": 9.97119968815241e-08
         },
         "stop": 2,
-        "result_fun": 0.9691808171247756,
+        "result_fun": 0.9691808171253182,
         "result_success": true,
         "result_status": 2
       },
       {
         "backend": "pykep",
         "optimizer": "bite_minimize",
-        "seconds": 0.06061468398547731,
+        "seconds": 0.060278791992459446,
         "evals": 4096,
-        "evals_per_second": 67574.38512723026,
+        "evals_per_second": 67950.93041201601,
         "feasible": true,
         "best": {
-          "wait": 0.4599657709158427,
-          "tof": 0.5435511096634289,
-          "departure": 0.4599657709158427,
-          "arrival": 1.0035168805792716,
-          "dv": 600.0000000191657,
-          "excess": 1.9165668163623195e-08
+          "wait": 1.2546047534200966e-11,
+          "tof": 0.9691808170800624,
+          "departure": 1.2546047534200966e-11,
+          "arrival": 0.9691808170926085,
+          "dv": 600.0000000817067,
+          "excess": 8.170673027052544e-08
         },
         "stop": 0,
-        "result_fun": 1.0035168806684394,
+        "result_fun": 0.9691808171240094,
+        "result_success": true,
+        "result_status": 0
+      },
+      {
+        "backend": "pykep-rust",
+        "optimizer": "bite_minimize",
+        "seconds": 0.026642243028618395,
+        "evals": 4096,
+        "evals_per_second": 153740.8091203201,
+        "feasible": true,
+        "best": {
+          "wait": 1.2546047534200966e-11,
+          "tof": 0.9691808170800624,
+          "departure": 1.2546047534200966e-11,
+          "arrival": 0.9691808170926085,
+          "dv": 600.0000000817068,
+          "excess": 8.170684395736316e-08
+        },
+        "stop": 0,
+        "result_fun": 0.9691808171240094,
         "result_success": true,
         "result_status": 0
       },
       {
         "backend": "numba",
         "optimizer": "bite_minimize",
-        "seconds": 0.014393199991900474,
+        "seconds": 0.012895023042801768,
         "evals": 4096,
-        "evals_per_second": 284578.8290515628,
+        "evals_per_second": 317641.9294796422,
         "feasible": true,
         "best": {
-          "wait": 0.45996188308656183,
-          "tof": 0.5435549983259553,
-          "departure": 0.45996188308656183,
-          "arrival": 1.003516881412517,
-          "dv": 600.0000000714406,
-          "excess": 7.144058145058807e-08
+          "wait": 1.2546047534200966e-11,
+          "tof": 0.9691808170800624,
+          "departure": 1.2546047534200966e-11,
+          "arrival": 0.9691808170926084,
+          "dv": 600.000000081707,
+          "excess": 8.170695764420088e-08
         },
         "stop": 0,
-        "result_fun": 1.0035168814625515,
+        "result_fun": 0.9691808171240096,
         "result_success": true,
         "result_status": 0
       }

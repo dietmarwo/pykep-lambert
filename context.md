@@ -11,12 +11,12 @@ This file assumes the project root is the directory containing
 `benchmark_numba_lambert.py`. All paths in this document are relative to that
 project root.
 
-It is a standalone Numba-based companion project for pykep Lambert workloads.
-An AI working on this project should need only:
+It is a standalone Python/Numba/Rust companion project for pykep Lambert
+workloads. An AI working on this project should need only:
 
 - the files in this project
 - the public pykep 2.6 implementation of `lambert_problem`
-- the public package APIs listed in the dependency section
+- the published package APIs listed in the dependency section
 
 Do not assume access to files outside this project root.
 
@@ -24,7 +24,9 @@ The code implements a Numba port following the numerical structure of pykep
 2.6's Izzo Lambert solver, then uses it in Keplerian TSP-style transfer
 benchmarks bundled with this project. The table benchmark is self-contained,
 runs in-memory, and excludes `.npz` or other disk serialization from timed
-measurements.
+measurements. It also contains consumers for both pykep-rust distribution
+channels: a Python backend using the PyPI wheel and a standalone native crate
+using crates.io dependencies.
 
 ## Dependencies
 
@@ -36,7 +38,16 @@ The benchmark expects:
 - `pykep` 2.6
 - `scipy`
 - `fcmaes`
+- `pykep-rust==0.1.1`
 - local bundled KTTSP files in `problems/`
+
+The native benchmark in `rust/` expects Rust 1.88 or newer and pins:
+
+- `pykep-core = 0.1.1`
+- `fcmaes-core = 0.1.3`
+
+Do not replace those with path dependencies when validating published
+artifacts.
 
 The code has been checked on an AMD 9950X 16-core CPU. Thread counts in the
 benchmarks are hardware-specific measurements, not universal tuning advice.
@@ -51,15 +62,25 @@ benchmarks are hardware-specific measurements, not universal tuning advice.
   Python wrapper around `pk_lambert.py`. Provides a `NumbaTransfer` class with
   scalar, batch, and fixed-leg objective APIs.
 
+- `pykep_rust_transfer.py`
+  Scalar `compute_transfer` and Lambert adapter backed by the published
+  `pykep-rust` wheel.
+
 - `utils_users.py`
   Local KTTSP problem loader and pykep reference implementation. Parses bundled
   `.kttsp` files, builds pykep planets, classifies inner/outer/switch transfer
   types, and provides `TomatoProblem.compute_transfer()`.
 
 - `benchmark_numba_lambert.py`
-  Main benchmark driver. Covers Lambert-only calls, full `compute_transfer`,
-  Numba table creation, optional original-pykep table creation, CMA ask/tell,
-  and BiteOpt.
+  Main benchmark driver. Covers Lambert-only calls and full
+  `compute_transfer` for pykep, pykep-rust, and Numba; Numba table creation;
+  optional original-pykep table creation; CMA ask/tell; and BiteOpt.
+
+- `test_pykep_rust_transfer.py`
+  Installed-wheel version and numerical parity check.
+
+- `rust/`
+  Independent crates.io consumer and native fixed-leg optimizer benchmark.
 
 - `README.md`
   Short human-facing overview and headline result.
@@ -131,6 +152,21 @@ dvs = transfer.compute_transfer_batch([
     ...
 ])
 ```
+
+Use `PykepRustTransfer` to exercise the installed PyPI wheel:
+
+```python
+from pykep_rust_transfer import PykepRustTransfer
+
+transfer = PykepRustTransfer(problem)
+dv = transfer.compute_transfer(i_from, i_to, t_start_days, tof_days)
+```
+
+The KTTSP files contain a few non-canonical inclination representations that
+the stricter pykep-rust classical-element constructor rejects. The adapter
+therefore initializes each native Keplerian provider from the original-pykep
+Cartesian state at the reference epoch. Initialization is outside benchmark
+timings.
 
 Low-level kernels in `pk_lambert.py`:
 
@@ -275,6 +311,21 @@ python benchmark_numba_lambert.py \
   --json-out results/benchmark_table_pykep.json
 ```
 
+Published-wheel integration test:
+
+```bash
+python -m pip install "pykep-rust==0.1.1"
+python -m pytest -q test_pykep_rust_transfer.py
+```
+
+Native crates.io consumer:
+
+```bash
+cd rust
+cargo test --locked
+cargo run --release --locked
+```
+
 Fast smoke for table-code changes:
 
 ```bash
@@ -320,7 +371,7 @@ Speedup: `12.88x`. Both paths retained exactly the same cells over the same
 Default Numba-only table run:
 
 ```text
-numba table batch 16: 10709178 cells, 1.873333 s, 5716645.0 cells/s
+numba table batch 16: 10709178 cells, 1.873507 s, 5716112.1 cells/s
 ```
 
 The difference between `1.94 s` and `1.87 s` is normal run-to-run variance; use
@@ -331,22 +382,31 @@ Other default benchmark rows from `benchmark_latest.json`:
 
 ```text
 Lambert API:
-  pykep serial: 39027.9 calls/s
-  pykep batch 8: 179433.9 calls/s
-  numba serial: 523617.4 calls/s
-  numba batch 8: 4417722.3 calls/s
+  pykep serial: 39252.1 calls/s
+  pykep batch 8: 172134.4 calls/s
+  pykep-rust wheel serial: 93284.2 calls/s
+  numba serial: 528230.2 calls/s
+  numba batch 8: 4209411.6 calls/s
 
 compute_transfer:
-  pykep serial: 38734.8 calls/s
-  pykep batch 8: 271346.4 calls/s
-  numba serial: 308533.9 calls/s
-  numba batch 8: 2034060.6 calls/s
+  pykep serial: 39024.2 calls/s
+  pykep batch 8: 291646.6 calls/s
+  pykep-rust wheel serial: 107046.6 calls/s
+  numba serial: 310205.4 calls/s
+  numba batch 8: 2025427.4 calls/s
 
 optimizer:
-  CMA pykep: 67151.7 eval/s
-  CMA numba: 387845.7 eval/s
-  BiteOpt pykep: 67574.4 eval/s
-  BiteOpt numba: 284578.8 eval/s
+  CMA pykep: 71824.5 eval/s
+  CMA pykep-rust wheel: 171308.4 eval/s
+  CMA numba: 682390.4 eval/s
+  BiteOpt pykep: 67950.9 eval/s
+  BiteOpt pykep-rust wheel: 153740.8 eval/s
+  BiteOpt numba: 317641.9 eval/s
+
+native Rust (median of five warmed release runs):
+  fixed-leg objective: 484279 eval/s
+  CMA: 1241658 eval/s
+  BiteOpt: 729254 eval/s
 ```
 
 ## Extending The Code
@@ -357,7 +417,7 @@ When adding a new optimizer benchmark:
 - For batch ask/tell optimizers, prefer a fused Numba batch objective.
 - For scalar optimizers, add a scalar Numba objective like
   `fixed_leg_objective_one()`.
-- Record the same best feasible information for pykep and Numba.
+- Record the same best feasible information for pykep, pykep-rust, and Numba.
 - Keep pykep as the reference oracle.
 - Avoid adding slow optional benchmarks to the no-argument default.
 
@@ -402,12 +462,18 @@ Minimum:
 
 ```bash
 python -m py_compile *.py
+python -m pytest -q
 python benchmark_numba_lambert.py \
   --samples 128 \
   --optimizer-evals 128 \
   --table-target-max-time 2 \
   --json-out results/smoke_table.json
 python -m json.tool results/smoke_table.json >/dev/null
+
+cd rust
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
 ```
 
 For table comparison changes:

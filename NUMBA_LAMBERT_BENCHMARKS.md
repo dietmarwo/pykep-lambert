@@ -1,6 +1,6 @@
-# Numba Lambert Port and Benchmarks
+# pykep Lambert Python, Numba, and Rust Benchmarks
 
-Generated on 2026-07-01 from:
+Python results generated on 2026-07-26 from:
 
 ```bash
 python benchmark_numba_lambert.py
@@ -8,6 +8,13 @@ python benchmark_numba_lambert.py
 
 Machine-readable results are in `results/benchmark_latest.json`; the same run
 is also copied to `results/benchmark_32768.json`.
+
+The native Rust results are medians of five warmed release-mode runs from:
+
+```bash
+cd rust
+cargo run --release --locked
+```
 
 The original pykep table-creation comparison is intentionally not part of the
 default command because it is much slower. It was run separately with:
@@ -48,11 +55,29 @@ competition code used by team fcmaes, not from a toy standalone example. The
 measured paths therefore include the same kinds of objective, transfer-grid,
 and sparse-table loops that appear in competition search workflows.
 
+Two published Rust deployment paths are included:
+
+- `pykep_rust_transfer.py` exercises the `pykep-rust 0.1.1` PyPI wheel through
+  its Python `Planet` and `LambertProblem` APIs.
+- `rust/` is an independent Cargo project pinned to crates.io
+  `pykep-core 0.1.1` and `fcmaes-core 0.1.3`. It has no path or Git
+  dependencies on either development repository.
+
+Some KTTSP input rows use non-canonical inclination representations accepted
+by original pykep. The wheel backend therefore seeds its native Keplerian
+providers once from original-pykep Cartesian states. This initialization is
+outside every timed region; all timed propagation and Lambert solves use the
+published wheel.
+
 ## Benchmark Setup
 
 - Problem: `problems/easy.kttsp`
 - pykep: `2.6`
+- pykep-rust wheel: `0.1.1`
+- pykep-core crate: `0.1.1`
+- fcmaes-core crate: `0.1.3`
 - Python: `3.12.13`
+- Rust: release profile, Rust `1.88` minimum
 - Hardware checked: AMD 9950X, 16-core CPU
 - Lambert revolution setting: `[5, 2, 0]`
 - Random transfer samples: `32768`
@@ -84,10 +109,11 @@ speedups for this API shape.
 
 | mode | samples | seconds | calls/s | speedup vs pykep serial |
 |---|---:|---:|---:|---:|
-| pykep serial | 32768 | 0.839604 | 39,027.9 | 1.00x |
-| pykep batch 8 | 32768 | 0.182619 | 179,433.9 | 4.60x |
-| numba serial | 32768 | 0.062580 | 523,617.4 | 13.42x |
-| numba batch 8 | 32768 | 0.007417 | 4,417,722.3 | 113.19x |
+| pykep serial | 32768 | 0.834809 | 39,252.1 | 1.00x |
+| pykep batch 8 | 32768 | 0.190363 | 172,134.4 | 4.39x |
+| pykep-rust wheel serial | 32768 | 0.351271 | 93,284.2 | 2.38x |
+| numba serial | 32768 | 0.062034 | 528,230.2 | 13.46x |
+| numba batch 8 | 32768 | 0.007784 | 4,209,411.6 | 107.24x |
 
 Accuracy versus pykep serial:
 
@@ -96,6 +122,13 @@ Accuracy versus pykep serial:
 - mean absolute delta-v difference: `5.126010293315941e-14 m/s`
 - max relative difference: `1.7903088754118263e-14`
 
+Published `pykep-rust` wheel accuracy versus pykep serial:
+
+- finite cases compared: `32768`
+- max absolute delta-v difference: `6.230038707144558e-11 m/s`
+- mean absolute delta-v difference: `2.3796586988249213e-13 m/s`
+- max relative difference: `4.732783496926049e-14`
+
 ## compute_transfer Results
 
 These timings include KTTSP ephemeris propagation plus Lambert. This is the
@@ -103,10 +136,11 @@ drop-in replacement path for `TomatoProblem.compute_transfer`.
 
 | mode | samples | seconds | calls/s | speedup vs pykep serial |
 |---|---:|---:|---:|---:|
-| pykep serial | 32768 | 0.845958 | 38,734.8 | 1.00x |
-| pykep batch 8 | 32768 | 0.120761 | 271,346.4 | 7.01x |
-| numba serial | 32768 | 0.106205 | 308,533.9 | 7.97x |
-| numba batch 8 | 32768 | 0.016110 | 2,034,060.6 | 52.51x |
+| pykep serial | 32768 | 0.839684 | 39,024.2 | 1.00x |
+| pykep batch 8 | 32768 | 0.112355 | 291,646.6 | 7.47x |
+| pykep-rust wheel serial | 32768 | 0.306110 | 107,046.6 | 2.74x |
+| numba serial | 32768 | 0.105633 | 310,205.4 | 7.95x |
+| numba batch 8 | 32768 | 0.016178 | 2,025,427.4 | 51.90x |
 
 Accuracy versus pykep serial:
 
@@ -115,10 +149,18 @@ Accuracy versus pykep serial:
 - mean absolute delta-v difference: `1.7450147126981189e-10 m/s`
 - max relative difference: `1.6662656465202954e-10`
 
+Published `pykep-rust` wheel accuracy versus pykep serial:
+
+- finite cases compared: `32768`
+- max absolute delta-v difference: `3.1397348720929585e-7 m/s`
+- mean absolute delta-v difference: `4.4653163287712745e-10 m/s`
+- max relative difference: `1.5170505910298076e-10`
+
 The full `compute_transfer` path is less extreme than the Lambert API benchmark because
 state propagation and Python wrapper work are part of the measurement. The
-batched Numba path still gives roughly `7.49x` the throughput of warmed pykep
-batch mode and roughly `52.51x` the throughput of pykep serial mode.
+published wheel gives `2.74x` the scalar throughput of original pykep. The
+batched Numba path gives roughly `6.94x` the throughput of warmed pykep batch
+mode and `51.90x` the throughput of pykep serial mode.
 
 ## Lambert Table Creation Results
 
@@ -143,7 +185,7 @@ Settings:
 
 | mode | pairs | evaluated cells | seconds | cells/s | nonempty pairs | retained cells |
 |---|---:|---:|---:|---:|---:|---:|
-| numba table batch 16 | 474 | 10709178 | 1.873333 | 5,716,645.0 | 301 | 175150 |
+| numba table batch 16 | 474 | 10709178 | 1.873507 | 5,716,112.1 | 301 | 175150 |
 
 Cells evaluated by transfer type: `4304304` inner, `4297626` outer, and
 `2107248` switch. Retained cells by transfer type: `65861` inner, `71768`
@@ -164,11 +206,13 @@ nonempty ordered pairs in this benchmark.
 ## Optimizer Examples
 
 `benchmark_numba_lambert.py` also includes a small fixed-leg optimization with
-two fcmaes optimizers:
+two fcmaes optimizers and three Python-callable transfer backends:
 
 - `cma_ask_tell`: `fcmaes.cmaescpp.ACMA_C` using ask/tell population batches.
 - `bite_minimize`: `fcmaes.bitecpp.minimize`, a scalar `fun(x)` API with no
   ask/tell loop.
+- Backends: original `pykep`, the published `pykep-rust` wheel, and the local
+  Numba implementation.
 
 The decision vector is:
 
@@ -191,24 +235,44 @@ compiled scalar fixed-leg objective per BiteOpt call.
 
 | optimizer | backend | evals | seconds | evals/s | feasible | arrival | dv | wait | tof |
 |---|---|---:|---:|---:|---|---:|---:|---:|---:|
-| cma_ask_tell | pykep | 3812 | 0.056767 | 67,151.7 | True | 0.969180817 | 600.000000 | 0.000000000 | 0.969180817 |
-| cma_ask_tell | numba | 3876 | 0.009994 | 387,845.7 | True | 0.969180817 | 600.000000 | 0.000000000 | 0.969180817 |
-| bite_minimize | pykep | 4096 | 0.060615 | 67,574.4 | True | 1.003516881 | 600.000000 | 0.459965771 | 0.543551110 |
-| bite_minimize | numba | 4096 | 0.014393 | 284,578.8 | True | 1.003516881 | 600.000000 | 0.459961883 | 0.543554998 |
+| cma_ask_tell | pykep | 3972 | 0.055301 | 71,824.5 | True | 0.969180817 | 600.000000 | 0.000000000 | 0.969180817 |
+| cma_ask_tell | pykep-rust wheel | 3972 | 0.023186 | 171,308.4 | True | 0.969180817 | 600.000000 | 0.000000000 | 0.969180817 |
+| cma_ask_tell | numba | 3972 | 0.005821 | 682,390.4 | True | 0.969180817 | 600.000000 | 0.000000000 | 0.969180817 |
+| bite_minimize | pykep | 4096 | 0.060279 | 67,950.9 | True | 0.969180817 | 600.000000 | 0.000000000 | 0.969180817 |
+| bite_minimize | pykep-rust wheel | 4096 | 0.026642 | 153,740.8 | True | 0.969180817 | 600.000000 | 0.000000000 | 0.969180817 |
+| bite_minimize | numba | 4096 | 0.012895 | 317,641.9 | True | 0.969180817 | 600.000000 | 0.000000000 | 0.969180817 |
 
-The direct BiteOpt path shows the cost trade-off between optimizer overhead and
-batching. With this small two-variable example, pykep BiteOpt and pykep CMA
-ask/tell have similar throughput, while Numba BiteOpt is `4.21x` faster than
-pykep BiteOpt. For the Numba backend, CMA ask/tell remains faster overall
-because it preserves population batching; with population size `32` and 8
-Numba threads it is `5.78x` faster than pykep CMA ask/tell and `1.36x` faster
-than Numba BiteOpt.
+The wheel backend is `2.38x` faster than original pykep in CMA ask/tell and
+`2.26x` faster in BiteOpt. Numba remains faster inside Python because it fuses
+population evaluation and avoids per-solution Python object materialization.
+
+## Native Rust Optimizer Results
+
+The `rust/` executable removes the Python boundary and uses `fcmaes-core`
+directly. The following timings are medians of five warmed release-mode runs:
+
+| path | evals | seconds | evals/s | feasible | arrival | dv |
+|---|---:|---:|---:|---|---:|---:|
+| native fixed-leg objective | 32768 | 0.067663 | 484,279 | n/a | n/a | n/a |
+| native CMA-ES | 3808 | 0.003067 | 1,241,658 | True | 0.969180817 | 600.000000 |
+| native BiteOpt | 4096 | 0.005617 | 729,254 | True | 0.969180817 | 600.000000 |
+
+The native optimizer implementations are not byte-for-byte identical to the
+Python fcmaes wrappers, so evaluation counts can stop at slightly different
+points. They use the same two decision variables, bounds, 4,096 evaluation
+budget, seed, CMA population, Lambert branches, and penalty. Native CMA-ES
+delivered about `17.29x` the original-pykep Python throughput and `1.82x` the
+Numba-backed Python throughput in this run; native BiteOpt delivered about
+`10.73x` and `2.30x`, respectively.
 
 ## Notes
 
 - The benchmark intentionally separates the Lambert API layer from full
   `compute_transfer` because they answer different questions: solver throughput
   versus application-level throughput.
+- The PyPI and crates.io consumers pin exact published versions so a successful
+  clean build demonstrates that the deployed artifacts, rather than local
+  development paths, are usable.
 - The pykep batch numbers are not a straw man; they use a pre-warmed process
   pool. Numba still wins because it avoids Python object construction inside
   the hot loop and evaluates the population inside compiled code.
