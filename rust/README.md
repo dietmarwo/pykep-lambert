@@ -3,8 +3,8 @@
 This standalone crate ports the fixed-leg `easy.kttsp` optimization workload
 to native Rust. It deliberately uses only published registry packages:
 
-- `pykep-core = 0.1.2` for Keplerian propagation and Lambert solutions;
-- `fcmaes-core = 0.1.3` for CMA-ES and BiteOpt.
+- `pykep-core = "=0.1.2"` for Keplerian propagation and Lambert solutions;
+- `fcmaes-core = "=0.1.3"` for CMA-ES and BiteOpt.
 
 No path or Git dependencies point at either development repository. A normal
 build therefore verifies that the crates.io packages are usable by a separate

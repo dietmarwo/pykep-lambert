@@ -63,8 +63,8 @@ Two published Rust deployment paths are included:
 - `pykep_rust_transfer.py` exercises the `pykep-rust 0.1.1` PyPI wheel through
   its Python `Planet` and `LambertProblem` APIs.
 - `rust/` is an independent Cargo project pinned to crates.io
-  `pykep-core 0.1.2` and `fcmaes-core 0.1.3`. It has no path or Git
-  dependencies on either development repository.
+  `pykep-core = "=0.1.2"` and `fcmaes-core = "=0.1.3"`. It has no path or
+  Git dependencies on either development repository.
 
 Some KTTSP input rows use non-canonical inclination representations accepted
 by original pykep. The wheel backend therefore seeds its native Keplerian
@@ -77,8 +77,8 @@ published wheel.
 - Problem: `problems/easy.kttsp`
 - pykep: `2.6`
 - pykep-rust wheel: `0.1.1`
-- pykep-core crate: `0.1.2`
-- fcmaes-core crate: `0.1.3`
+- pykep-core crate: `=0.1.2`
+- fcmaes-core crate: `=0.1.3`
 - Python: `3.12.13`
 - Rust: release profile, Rust `1.88` minimum
 - Hardware checked: AMD 9950X, 16-core CPU
