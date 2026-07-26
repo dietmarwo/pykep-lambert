@@ -35,9 +35,10 @@ the Python API boundary:
 | Numba batch 8 | 32,768 | 0.016178 | 2,025,427.4 | 51.90x |
 
 The native `rust/` consumer uses the crates.io releases directly. Across five
-release-mode runs, median serial and eight-worker batch full-transfer
-throughput reached `485,426` and `2,875,181 eval/s`; native CMA-ES and BiteOpt
-reached `1,771,331` and `724,012 eval/s`, respectively.
+release-mode runs, median serial, staged pykep batch, and outer-Rayon
+full-transfer throughput reached `480,473`, `2,104,628`, and `3,557,499
+eval/s`. Rayon-over-scalar CMA-ES, ask/tell batch CMA-ES, and BiteOpt reached
+`1,629,796`, `746,127`, and `719,882 eval/s`, respectively.
 
 The Rust consumer now deliberately extends the original scalar pykep model
 with ordered native batches. With 32,768 transfers and eight worker threads,
@@ -45,15 +46,28 @@ five release-mode runs produced these medians on the same benchmark host:
 
 | Rust stage | serial items/s | batch items/s | batch speedup |
 |---|---:|---:|---:|
-| Keplerian propagation | 7,278,981 | 54,381,577 | 7.47x |
-| Lambert evaluation | 547,264 | 4,061,278 | 7.42x |
-| full propagation + Lambert + objective | 485,426 | 2,875,181 | 5.92x |
+| Keplerian propagation | 6,641,114 | 28,374,014 | 4.27x |
+| Lambert evaluation | 443,248 | 1,942,456 | 4.38x |
+| full propagation + Lambert + objective | 480,473 | 2,104,628 | 4.38x |
 
 These are ordered, numerically identical batches. The full path first
-propagates every departure and arrival state in parallel and then evaluates
-every valid Lambert transfer in parallel. This is a project-level extension
-built on the published scalar `pykep-core 0.1.1` APIs, not a claim that the
-original Python pykep API provides native batching.
+groups departure and arrival states by ephemeris using
+`Ephemeris::states_parallel`, then evaluates both directions of every valid
+transfer using `solve_lambert_batch`. These numerical batch APIs are published
+in `pykep-core 0.1.2`; the project adds the KTTSP-specific staging, direction
+reduction, and objective construction.
+
+For comparison, the executable also uses fcmaes' Rayon executor to parallelize
+complete scalar objectives while every pykep call remains single-threaded.
+That path reaches `3,557,499 eval/s`, or 7.40x over serial and 1.69x over the
+staged pykep batch.
+
+The native optimizer also includes a `Cmaes::ask()` / batch evaluation /
+`Cmaes::tell()` mode. It reaches the same solution, but its 32-candidate
+population is too small to amortize three staged batch dispatches per
+generation: `746,127 eval/s` versus `1,629,796 eval/s` for fcmaes'
+outer-Rayon CMA path. The ask/tell path is useful for larger populations and
+more expensive cases, rather than an unconditional speedup.
 
 ## Where Native Batching Also Makes Sense
 
@@ -71,11 +85,12 @@ to amortize scheduling and allocation:
 - low-thrust leg mismatch/constraint evaluation across independent legs or
   candidates.
 
-This experiment motivated the generic ordered batch layer prepared for
-`pykep-core 0.1.2`. The benchmark remains pinned to published
-`pykep-core 0.1.1` so its recorded measurements are reproducible. Scalar APIs
-remain useful: tiny batches can be slower because thread scheduling and
-intermediate arrays dominate.
+This experiment motivated the generic ordered batch layer now published in
+`pykep-core 0.1.2`, and the native benchmark consumes that release. The
+historical Python-wheel table above remains explicitly labeled `pykep-rust
+0.1.1` because those measurements have not been rerun. Scalar APIs remain
+useful: tiny batches can be slower because thread scheduling and intermediate
+arrays dominate.
 
 ## Files
 
@@ -89,8 +104,8 @@ intermediate arrays dominate.
   optimizer benchmarks for pykep, `pykep-rust`, and Numba.
 - `test_pykep_rust_transfer.py`: installed-wheel integration and parity test.
 - `rust/`: standalone native benchmark and ordered parallel propagation,
-  Lambert, and full-transfer batch APIs using crates.io `pykep-core 0.1.1` and
-  `fcmaes-core 0.1.3`, with no path dependencies.
+  Lambert, full-transfer, and CMA ask/tell batch APIs using crates.io
+  `pykep-core 0.1.2` and `fcmaes-core 0.1.3`, with no path dependencies.
 - `NUMBA_LAMBERT_BENCHMARKS.md`: derivation notes, benchmark numbers, and
   interpretation.
 - `results/benchmark_latest.json`: latest machine-readable benchmark output.
@@ -114,6 +129,7 @@ Build and run the independent crates.io consumer:
 cd rust
 cargo test --locked
 cargo run --release --locked
+cargo run --release --locked -- --optimizer cma-batch
 ```
 
 The original pykep table-creation comparison is intentionally opt-in because it

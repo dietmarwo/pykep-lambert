@@ -9,7 +9,7 @@ publish = false
 
 [dependencies]
 fcmaes-core = "=0.1.3"
-pykep-core = "=0.1.1"
+pykep-core = "=0.1.2"
 
 [lints.rust]
 missing_docs = "deny"

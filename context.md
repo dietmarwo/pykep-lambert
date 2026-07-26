@@ -49,7 +49,7 @@ The benchmark expects:
 
 The native benchmark in `rust/` expects Rust 1.88 or newer and pins:
 
-- `pykep-core = 0.1.1`
+- `pykep-core = 0.1.2`
 - `fcmaes-core = 0.1.3`
 
 Do not replace those with path dependencies when validating published
@@ -211,11 +211,24 @@ Native APIs in `rust/src/lib.rs`:
 - `FixedLegProblem::objective_batch`
   Ordered optimizer-ready objectives with finite replacement for invalid rows.
 
-The Rust batch helpers use `fcmaes_core::parallel_batch`: one worker is serial,
-positive values select an exact cached Rayon pool size, and non-positive values
-use the global Rayon pool. Results preserve input order. This is currently a
-project-level layer over published scalar `pykep-core 0.1.1`. The experiment
-motivated the generic batch layer prepared for `pykep-core 0.1.2`.
+`FixedLegProblem::propagate_batch` groups requests by ephemeris and calls the
+`Ephemeris::states_parallel` API published in `pykep-core 0.1.2`.
+`lambert_delta_v_batch` maps each valid transfer to two `LambertRequest`s and
+calls the published `solve_lambert_batch`, then reduces the two directions.
+Zero workers uses Rayon's shared pool, one is serial, and larger values select
+an exact cached pool size. Results preserve input order.
+
+The native executable deliberately compares two strategies:
+
+- `full_transfer/parallel_scalar` and `cma_parallel_scalar` use
+  `fcmaes_core::parallel_batch` or fcmaes' internal equivalent to distribute
+  complete objectives with Rayon. Each objective calls only scalar pykep APIs.
+- `full_transfer/pykep_batch` and `cma_ask_tell_batch` stage the 0.1.2
+  ephemeris and Lambert batches inside one full population or transfer array.
+
+The local code adds only KTTSP-specific grouping, two-direction reduction, and
+objective construction. Do not add eclipse, access, conjunction, or other
+physics that pykep does not expose.
 
 ## Optimization Patterns
 
@@ -233,6 +246,11 @@ For fcmaes CMA-ES ask/tell:
 
 - Use population size 32 for the included two-variable example.
 - Use `NumbaTransfer.fixed_leg_objective_batch()` for the Numba backend.
+- In native Rust, `cma-batch` calls `Cmaes::ask()`, evaluates the complete
+  population with `FixedLegProblem::objective_batch()`, and returns it through
+  `Cmaes::tell()`.
+- Native `cma` is the comparison path: fcmaes distributes whole scalar
+  objectives over Rayon while each pykep call remains single-threaded.
 - On the AMD 9950X, 8 Numba threads were a good default for the small CMA
   population. Larger populations or other CPUs may differ.
 
@@ -348,6 +366,7 @@ Native crates.io consumer:
 cd rust
 cargo test --locked
 cargo run --release --locked
+cargo run --release --locked -- --optimizer cma-batch
 ```
 
 Fast smoke for table-code changes:
@@ -428,11 +447,12 @@ optimizer:
   BiteOpt numba: 317641.9 eval/s
 
 native Rust (median of five warmed release runs):
-  propagation serial / batch 8: 7278981 / 54381577 states/s
-  Lambert serial / batch 8: 547264 / 4061278 solves/s
-  full transfer serial / batch 8: 485426 / 2875181 eval/s
-  CMA: 1771331 eval/s
-  BiteOpt: 724012 eval/s
+  propagation serial / pykep batch 8: 6641114 / 28374014 states/s
+  Lambert serial / pykep batch 8: 443248 / 1942456 solves/s
+  full transfer serial: 480473 eval/s
+  full transfer outer Rayon / pykep batch 8: 3557499 / 2104628 eval/s
+  CMA outer Rayon / ask-tell pykep batch: 1629796 / 746127 eval/s
+  BiteOpt: 719882 eval/s
 ```
 
 ## Extending The Code

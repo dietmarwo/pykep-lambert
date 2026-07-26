@@ -8,7 +8,7 @@ use std::error::Error;
 use std::hint::black_box;
 use std::time::Instant;
 
-use fcmaes_core::{BiteParams, Cmaes, CmaesParams, Fitness, optimize_bite};
+use fcmaes_core::{BiteParams, Cmaes, CmaesParams, Fitness, optimize_bite, parallel_batch};
 use pykep_lambert_rust::{
     DAY_SECONDS, DV_LIMIT, DV_TOLERANCE, Decision, Evaluation, FixedLegProblem, LambertTransfer,
     MAX_TOF_DAYS, MAX_WAIT_DAYS, MAXIMUM_REVOLUTIONS, MIN_TOF_DAYS, MU_MOON, PropagationRequest,
@@ -19,12 +19,13 @@ const DEFAULT_OBJECTIVE_EVALUATIONS: usize = 32_768;
 const DEFAULT_OPTIMIZER_EVALUATIONS: u64 = 4_096;
 const DEFAULT_CMA_POPULATION: i32 = 32;
 const DEFAULT_SEED: u64 = 12_345;
-const DEFAULT_WORKERS: i32 = 8;
+const DEFAULT_WORKERS: usize = 8;
 const CMA_SIGMA: f64 = 0.25;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Optimizer {
     Cma,
+    CmaBatch,
     Bite,
     Both,
 }
@@ -33,9 +34,10 @@ impl Optimizer {
     fn parse(value: &str) -> Result<Self, String> {
         match value {
             "cma" => Ok(Self::Cma),
+            "cma-batch" => Ok(Self::CmaBatch),
             "bite" => Ok(Self::Bite),
             "both" => Ok(Self::Both),
-            _ => Err("--optimizer must be cma, bite, or both".to_owned()),
+            _ => Err("--optimizer must be cma, cma-batch, bite, or both".to_owned()),
         }
     }
 }
@@ -45,7 +47,7 @@ struct Args {
     objective_evaluations: usize,
     optimizer_evaluations: u64,
     optimizer: Optimizer,
-    workers: i32,
+    workers: usize,
     seed: u64,
 }
 
@@ -94,11 +96,11 @@ impl Args {
                 _ => return Err(format!("unknown argument: {argument}")),
             }
         }
-        if parsed.objective_evaluations == 0
-            || parsed.optimizer_evaluations == 0
-            || parsed.workers <= 0
-        {
-            return Err("evaluation counts and workers must be positive".to_owned());
+        if parsed.objective_evaluations == 0 || parsed.optimizer_evaluations == 0 {
+            return Err("evaluation counts must be positive".to_owned());
+        }
+        if parsed.workers > 1024 {
+            return Err("workers must not exceed 1024".to_owned());
         }
         Ok(parsed)
     }
@@ -121,8 +123,8 @@ fn print_help() {
          \nUsage: cargo run --release -- [OPTIONS]\n\
          \n  --objective-evaluations N  Raw objective calls (32768)\n\
          \n  --optimizer-evaluations N  Budget per optimizer (4096)\n\
-         \n  --optimizer NAME           cma, bite, or both (both)\n\
-         \n  --workers N                Batch and CMA objective workers (8)\n\
+         \n  --optimizer NAME           cma, cma-batch, bite, or both (both)\n\
+         \n  --workers N                Batch workers; 0 uses the shared pool (8)\n\
          \n  --seed N                   Deterministic optimizer/sample seed (12345)"
     );
 }
@@ -142,7 +144,7 @@ fn timed<T>(call: impl FnOnce() -> T) -> (f64, T) {
     (started.elapsed().as_secs_f64(), result)
 }
 
-fn print_stage(stage: &str, mode: &str, workers: i32, values: &[f64], seconds: f64) {
+fn print_stage(stage: &str, mode: &str, workers: usize, values: &[f64], seconds: f64) {
     let checksum = values.iter().sum::<f64>();
     let best = values.iter().copied().fold(f64::INFINITY, f64::min);
     println!(
@@ -159,7 +161,7 @@ fn print_stage(stage: &str, mode: &str, workers: i32, values: &[f64], seconds: f
     );
 }
 
-fn benchmark_batches(problem: &FixedLegProblem, evaluations: usize, workers: i32, seed: u64) {
+fn benchmark_batches(problem: &FixedLegProblem, evaluations: usize, workers: usize, seed: u64) {
     let decisions = (0..evaluations)
         .map(|index| sample_decision(index as u64, seed))
         .collect::<Vec<_>>();
@@ -238,16 +240,29 @@ fn benchmark_batches(problem: &FixedLegProblem, evaluations: usize, workers: i32
         lambert_parallel_seconds,
     );
 
-    let _ = black_box(problem.objective_batch(&decisions[..decisions.len().min(32)], workers));
+    let comparison_workers = i32::try_from(workers).expect("validated workers fit in i32");
+    let warm_objectives = &decisions[..decisions.len().min(32)];
+    let _ = black_box(parallel_batch(
+        warm_objectives,
+        comparison_workers,
+        |decision| problem.objective(*decision),
+    ));
+    let _ = black_box(problem.objective_batch(warm_objectives, workers));
     let (objective_serial_seconds, objective_serial) = timed(|| {
         decisions
             .iter()
             .map(|decision| black_box(problem.objective(*decision)))
             .collect::<Vec<_>>()
     });
-    let (objective_parallel_seconds, objective_parallel) =
+    let (objective_parallel_scalar_seconds, objective_parallel_scalar) = timed(|| {
+        parallel_batch(black_box(&decisions), comparison_workers, |decision| {
+            problem.objective(*decision)
+        })
+    });
+    let (objective_pykep_batch_seconds, objective_pykep_batch) =
         timed(|| problem.objective_batch(black_box(&decisions), workers));
-    assert_eq!(objective_parallel, objective_serial);
+    assert_eq!(objective_parallel_scalar, objective_serial);
+    assert_eq!(objective_pykep_batch, objective_serial);
     print_stage(
         "full_transfer",
         "serial",
@@ -257,22 +272,81 @@ fn benchmark_batches(problem: &FixedLegProblem, evaluations: usize, workers: i32
     );
     print_stage(
         "full_transfer",
-        "parallel",
+        "parallel_scalar",
         workers,
         &objective_serial,
-        objective_parallel_seconds,
+        objective_parallel_scalar_seconds,
+    );
+    print_stage(
+        "full_transfer",
+        "pykep_batch",
+        workers,
+        &objective_serial,
+        objective_pykep_batch_seconds,
     );
 }
 
 fn run_cma(
     problem: &FixedLegProblem,
     evaluations: u64,
-    workers: i32,
+    workers: usize,
     seed: u64,
 ) -> OptimizationReport {
+    let mut optimizer = make_cma(evaluations, seed);
+    let started = Instant::now();
+    // fcmaes distributes candidates with Rayon, while `Objective::eval_scalar`
+    // below performs one entirely scalar pykep propagation/Lambert objective.
+    let result = optimizer.optimize(
+        problem,
+        i32::try_from(workers).expect("validated workers fit in i32"),
+    );
+    let seconds = started.elapsed().as_secs_f64();
+    let evaluation = problem
+        .evaluate(Decision::new(result.x[0], result.x[1]))
+        .expect("CMA result must remain inside validated bounds");
+    OptimizationReport {
+        name: "cma_parallel_scalar",
+        seconds,
+        evaluations: result.evaluations,
+        stop: result.stop,
+        evaluation,
+    }
+}
+
+fn run_cma_ask_tell_batch(
+    problem: &FixedLegProblem,
+    evaluations: u64,
+    workers: usize,
+    seed: u64,
+) -> OptimizationReport {
+    let mut optimizer = make_cma(evaluations, seed);
+    let started = Instant::now();
+    while optimizer.result().evaluations < evaluations && optimizer.stop() == 0 {
+        let population = optimizer.ask();
+        let decisions = population
+            .iter()
+            .map(|candidate| Decision::new(candidate[0], candidate[1]))
+            .collect::<Vec<_>>();
+        let objectives = problem.objective_batch(&decisions, workers);
+        optimizer.tell(&objectives);
+    }
+    let seconds = started.elapsed().as_secs_f64();
+    let result = optimizer.result();
+    let evaluation = problem
+        .evaluate(Decision::new(result.x[0], result.x[1]))
+        .expect("CMA ask/tell result must remain inside validated bounds");
+    OptimizationReport {
+        name: "cma_ask_tell_batch",
+        seconds,
+        evaluations: result.evaluations,
+        stop: result.stop,
+        evaluation,
+    }
+}
+
+fn make_cma(evaluations: u64, seed: u64) -> Cmaes {
     let lower = [0.0, MIN_TOF_DAYS];
     let upper = [MAX_WAIT_DAYS, MAX_TOF_DAYS];
-    let initial = midpoint();
     let mut fitness = Fitness::bounded(2, 1, &lower, &upper);
     fitness.set_normalize(true);
     let params = CmaesParams {
@@ -281,20 +355,7 @@ fn run_cma(
         seed,
         ..Default::default()
     };
-    let mut optimizer = Cmaes::new(fitness, &initial, &[CMA_SIGMA], &params);
-    let started = Instant::now();
-    let result = optimizer.optimize(problem, workers);
-    let seconds = started.elapsed().as_secs_f64();
-    let evaluation = problem
-        .evaluate(Decision::new(result.x[0], result.x[1]))
-        .expect("CMA result must remain inside validated bounds");
-    OptimizationReport {
-        name: "cma",
-        seconds,
-        evaluations: result.evaluations,
-        stop: result.stop,
-        evaluation,
-    }
+    Cmaes::new(fitness, &midpoint(), &[CMA_SIGMA], &params)
 }
 
 fn run_bite(problem: &FixedLegProblem, evaluations: u64, seed: u64) -> OptimizationReport {
@@ -372,7 +433,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse()?;
     let problem = FixedLegProblem::easy()?;
     println!(
-        "CONFIG source_commit={} pykep_core=0.1.1 fcmaes_core=0.1.3 \
+        "CONFIG source_commit={} pykep_core=0.1.2 fcmaes_core=0.1.3 \
          objective_evaluations={} optimizer_evaluations={} optimizer={:?} \
          cma_population={} workers={} seed={} dv_limit={}",
         SOURCE_COMMIT,
@@ -392,6 +453,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
     if matches!(args.optimizer, Optimizer::Cma | Optimizer::Both) {
         print_optimizer(&run_cma(
+            &problem,
+            args.optimizer_evaluations,
+            args.workers,
+            args.seed,
+        ));
+    }
+    if matches!(args.optimizer, Optimizer::CmaBatch | Optimizer::Both) {
+        print_optimizer(&run_cma_ask_tell_batch(
             &problem,
             args.optimizer_evaluations,
             args.workers,
@@ -432,8 +501,20 @@ mod tests {
         assert_eq!(args.objective_evaluations, 128);
         assert_eq!(args.optimizer, Optimizer::Bite);
         assert_eq!(args.workers, 2);
-        assert!(Args::parse_from(["--workers".to_owned(), "0".to_owned()]).is_err());
+        assert_eq!(
+            Args::parse_from(["--workers".to_owned(), "0".to_owned()])
+                .unwrap()
+                .workers,
+            0
+        );
+        assert!(Args::parse_from(["--workers".to_owned(), "1025".to_owned()]).is_err());
         assert!(Args::parse_from(["--optimizer".to_owned(), "de".to_owned()]).is_err());
+        assert_eq!(
+            Args::parse_from(["--optimizer".to_owned(), "cma-batch".to_owned()])
+                .unwrap()
+                .optimizer,
+            Optimizer::CmaBatch
+        );
     }
 
     #[test]
@@ -447,15 +528,33 @@ mod tests {
     }
 
     #[test]
-    fn both_fcmaes_optimizers_complete_a_smoke_budget() {
+    fn all_fcmaes_optimizer_modes_complete_a_smoke_budget() {
         let problem = FixedLegProblem::easy().unwrap();
-        for report in [
-            run_cma(&problem, 256, 2, DEFAULT_SEED),
-            run_bite(&problem, 256, DEFAULT_SEED),
-        ] {
+        let cma = run_cma(&problem, 256, 2, DEFAULT_SEED);
+        let cma_batch = run_cma_ask_tell_batch(&problem, 256, 2, DEFAULT_SEED);
+        assert_eq!(cma.evaluations, cma_batch.evaluations);
+        for report in [cma, cma_batch, run_bite(&problem, 256, DEFAULT_SEED)] {
             assert!(report.evaluations > 0);
             assert!(report.evaluation.objective.is_finite());
             assert!(report.evaluation.delta_v.is_finite());
         }
+    }
+
+    #[test]
+    fn cma_population_batch_matches_scalar_objectives() {
+        let problem = FixedLegProblem::easy().unwrap();
+        let mut optimizer = make_cma(256, DEFAULT_SEED);
+        let population = optimizer.ask();
+        let decisions = population
+            .iter()
+            .map(|candidate| Decision::new(candidate[0], candidate[1]))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            problem.objective_batch(&decisions, 2),
+            decisions
+                .iter()
+                .map(|decision| problem.objective(*decision))
+                .collect::<Vec<_>>()
+        );
     }
 }

@@ -63,7 +63,7 @@ Two published Rust deployment paths are included:
 - `pykep_rust_transfer.py` exercises the `pykep-rust 0.1.1` PyPI wheel through
   its Python `Planet` and `LambertProblem` APIs.
 - `rust/` is an independent Cargo project pinned to crates.io
-  `pykep-core 0.1.1` and `fcmaes-core 0.1.3`. It has no path or Git
+  `pykep-core 0.1.2` and `fcmaes-core 0.1.3`. It has no path or Git
   dependencies on either development repository.
 
 Some KTTSP input rows use non-canonical inclination representations accepted
@@ -77,7 +77,7 @@ published wheel.
 - Problem: `problems/easy.kttsp`
 - pykep: `2.6`
 - pykep-rust wheel: `0.1.1`
-- pykep-core crate: `0.1.1`
+- pykep-core crate: `0.1.2`
 - fcmaes-core crate: `0.1.3`
 - Python: `3.12.13`
 - Rust: release profile, Rust `1.88` minimum
@@ -252,43 +252,56 @@ population evaluation and avoids per-solution Python object materialization.
 ## Native Rust Batch And Optimizer Results
 
 The `rust/` executable removes the Python boundary and uses `fcmaes-core`
-directly. Its ordered batch layer deliberately extends the original scalar
-pykep behavior using the published scalar `pykep-core 0.1.1` building blocks.
-It separately batches every ephemeris propagation and every Lambert
-calculation, then composes them into a staged full-transfer batch.
+directly. It uses the ordered batch APIs published in `pykep-core 0.1.2`:
+ephemeris requests are grouped by provider and evaluated through
+`Ephemeris::states_parallel`, while clockwise and counter-clockwise
+`LambertRequest`s are evaluated through `solve_lambert_batch`. The local layer
+then composes these into a staged full-transfer objective.
 
 The following timings are medians of five warmed release-mode runs:
 
 | path | evals | seconds | evals/s | feasible | arrival | dv |
 |---|---:|---:|---:|---|---:|---:|
-| propagation serial | 65536 | 0.009003 | 7,278,981 | n/a | n/a | n/a |
-| propagation batch, 8 workers | 65536 | 0.001205 | 54,381,577 | n/a | n/a | n/a |
-| Lambert serial | 32768 | 0.059876 | 547,264 | n/a | n/a | n/a |
-| Lambert batch, 8 workers | 32768 | 0.008068 | 4,061,278 | n/a | n/a | n/a |
-| full transfer serial | 32768 | 0.067504 | 485,426 | n/a | n/a | n/a |
-| full transfer batch, 8 workers | 32768 | 0.011397 | 2,875,181 | n/a | n/a | n/a |
-| native CMA-ES | 3808 | 0.002150 | 1,771,331 | True | 0.969180817 | 600.000000 |
-| native BiteOpt | 4096 | 0.005657 | 724,012 | True | 0.969180817 | 600.000000 |
+| propagation serial | 65536 | 0.009868 | 6,641,114 | n/a | n/a | n/a |
+| propagation pykep batch, 8 workers | 65536 | 0.002310 | 28,374,014 | n/a | n/a | n/a |
+| Lambert serial | 32768 | 0.073927 | 443,248 | n/a | n/a | n/a |
+| Lambert pykep batch, 8 workers | 32768 | 0.016869 | 1,942,456 | n/a | n/a | n/a |
+| full transfer serial | 32768 | 0.068199 | 480,473 | n/a | n/a | n/a |
+| full transfer, Rayon over scalar pykep | 32768 | 0.009211 | 3,557,499 | n/a | n/a | n/a |
+| full transfer, staged pykep batch | 32768 | 0.015569 | 2,104,628 | n/a | n/a | n/a |
+| CMA-ES, Rayon over scalar pykep | 3808 | 0.002336 | 1,629,796 | True | 0.969180817 | 600.000000 |
+| CMA-ES, ask/tell pykep batch | 3744 | 0.005018 | 746,127 | True | 0.969180817 | 600.000000 |
+| native BiteOpt | 4096 | 0.005690 | 719,882 | True | 0.969180817 | 600.000000 |
 
-The native batch speedups are `7.47x` for propagation, `7.42x` for Lambert,
-and `5.92x` for the complete staged transfer. The executable verifies exact
-serial/batch output equality before printing each measurement.
+The native pykep batch speedups are `4.27x` for propagation, `4.38x` for
+Lambert, and `4.38x` for the complete staged transfer. The comparison path
+uses fcmaes' Rayon executor around complete scalar objectives, keeping every
+pykep call single-threaded; it reaches `7.40x` over serial and `1.69x` the
+staged pykep-batch throughput. The executable verifies exact equality among
+all three objective arrays before printing each measurement.
 
 The native optimizer implementations are not byte-for-byte identical to the
 Python fcmaes wrappers, so evaluation counts can stop at slightly different
 points. They use the same two decision variables, bounds, 4,096 evaluation
-budget, seed, CMA population, Lambert branches, and penalty. Native CMA-ES
-delivered about `24.66x` the original-pykep Python throughput and `2.60x` the
-Numba-backed Python throughput in this run; native BiteOpt delivered about
-`10.65x` and `2.28x`, respectively.
+budget, seed, CMA population, Lambert branches, and penalty. The new Rust
+ask/tell mode calls `Cmaes::ask()`, sends the complete population through
+`FixedLegProblem::objective_batch`, and calls `Cmaes::tell()`. All three native
+optimizers reached the same feasible boundary solution.
 
-Promising future batch surfaces are generic multi-provider ephemerides,
-Lambert direction/revolution/TOF grids, fused KTTSP or pork-chop tables,
-optimizer populations, robust Monte Carlo ensembles, transfer encodings,
-flyby constraints/Jacobians, MIMA estimates, and independent low-thrust leg
-constraints. The generic batch layer prepared for `pykep-core 0.1.2` exposes
-these patterns through the typed Python API. Scalar APIs remain preferable for
-tiny batches where scheduling overhead dominates.
+For this population of only 32 candidates, ask/tell batching reaches
+`746,127 eval/s`, below the outer-Rayon CMA path's `1,629,796 eval/s`.
+A generation requires two ephemeris group dispatches and one Lambert dispatch,
+so this small population cannot amortize scheduling and intermediate-vector
+costs. Large transfer grids still gain 4–5x; larger populations and more
+expensive objective cases are the intended optimizer-batch use cases.
+
+Other existing pykep computations with published 0.1.2 batch entry points
+include vector operations, anomaly conversions,
+Lagrangian/universal/Keplerian propagation (including the Lagrangian STM and
+time-grid variants), ephemeris accelerations/periods/orbital elements, and ZOH
+low-thrust mismatch evaluation. This project does not add eclipse, access, or
+conjunction physics not already exposed by pykep. Scalar APIs remain
+preferable for tiny batches where scheduling overhead dominates.
 
 ## Notes
 
@@ -301,10 +314,11 @@ tiny batches where scheduling overhead dominates.
 - The pykep batch numbers are not a straw man; they use a pre-warmed process
   pool. Numba still wins because it avoids Python object construction inside
   the hot loop and evaluates the population inside compiled code.
-- For very small batches, Numba batch mode can lose to scalar Numba due to
-  scheduling overhead. The advantage appears when the batch is large enough to
-  amortize that overhead, as in transfer-table construction, beam search, and
-  CMA population evaluation.
+- For very small batches, either Numba or Rust batch mode can lose to its
+  scalar/parallel-scalar alternative due to scheduling overhead. The advantage
+  appears when a batch is large enough to amortize that overhead, as in
+  transfer-table construction and beam search. The measured Rust CMA
+  population of 32 is a concrete counterexample, documented above.
 - Final contest submissions should still be validated against the pykep
   reference path. The observed numerical differences here are far below the
   KTTSP delta-v thresholds, but pykep remains the external reference.

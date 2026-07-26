@@ -3,9 +3,9 @@
 
 //! Fixed KTTSP Lambert-leg objective using the published Rust crates.
 
-use fcmaes_core::{NAN_REPLACEMENT, Objective, parallel_batch};
+use fcmaes_core::{NAN_REPLACEMENT, Objective};
 use pykep_core::astro::elements::ClassicalElements;
-use pykep_core::astro::lambert::LambertProblem;
+use pykep_core::astro::lambert::{LambertProblem, LambertRequest, solve_lambert_batch};
 use pykep_core::ephemeris::{Ephemeris, KeplerianEphemeris};
 use pykep_core::time::epoch::Epoch;
 
@@ -159,69 +159,64 @@ impl LambertTransfer {
 /// produces a finite solution.
 #[must_use]
 pub fn lambert_delta_v(transfer: &LambertTransfer) -> Option<f64> {
-    if !transfer
-        .departure_state
-        .iter()
-        .chain(&transfer.arrival_state)
-        .all(|value| value.is_finite())
-        || !transfer.tof_seconds.is_finite()
-        || transfer.tof_seconds <= 0.0
-        || !transfer.mu.is_finite()
-        || transfer.mu <= 0.0
-    {
+    if !valid_lambert_transfer(transfer) {
         return None;
     }
 
-    let initial_position = [
-        transfer.departure_state[0],
-        transfer.departure_state[1],
-        transfer.departure_state[2],
-    ];
-    let final_position = [
-        transfer.arrival_state[0],
-        transfer.arrival_state[1],
-        transfer.arrival_state[2],
-    ];
-    let initial_velocity = [
-        transfer.departure_state[3],
-        transfer.departure_state[4],
-        transfer.departure_state[5],
-    ];
-    let final_velocity = [
-        transfer.arrival_state[3],
-        transfer.arrival_state[4],
-        transfer.arrival_state[5],
-    ];
     let mut delta_v = f64::INFINITY;
 
     for clockwise in [false, true] {
+        let request = lambert_request(transfer, clockwise);
         let Ok(lambert) = LambertProblem::new(
-            initial_position,
-            final_position,
-            transfer.tof_seconds,
-            transfer.mu,
-            clockwise,
-            transfer.maximum_revolutions,
+            request.initial_position,
+            request.final_position,
+            request.time,
+            request.mu,
+            request.clockwise,
+            request.maximum_revolutions,
         ) else {
             continue;
         };
-        for solution in lambert.solutions() {
-            let departure_impulse = difference_norm(solution.departure_velocity, initial_velocity);
-            let arrival_impulse = difference_norm(solution.arrival_velocity, final_velocity);
-            delta_v = delta_v.min(departure_impulse + arrival_impulse);
-        }
+        delta_v = delta_v.min(problem_delta_v(transfer, &lambert));
     }
     delta_v.is_finite().then_some(delta_v)
 }
 
-/// Evaluates an ordered Lambert batch.
+/// Evaluates an ordered Lambert batch through `pykep-core`.
 ///
-/// `workers = 1` is serial, values above one use exactly that many cached
-/// Rayon threads, and values at or below zero use the global Rayon pool.
-/// Output order always matches input order.
+/// Zero workers uses Rayon's shared pool, one is serial, and larger values use
+/// a cached pool containing exactly that many threads. Invalid input rows stay
+/// `None`, output order matches input order, and a rare batch-level Lambert
+/// geometry error falls back to the scalar path so other rows remain usable.
 #[must_use]
-pub fn lambert_delta_v_batch(transfers: &[LambertTransfer], workers: i32) -> Vec<Option<f64>> {
-    parallel_batch(transfers, workers, lambert_delta_v)
+pub fn lambert_delta_v_batch(transfers: &[LambertTransfer], workers: usize) -> Vec<Option<f64>> {
+    let valid = transfers
+        .iter()
+        .enumerate()
+        .filter(|(_, transfer)| valid_lambert_transfer(transfer))
+        .collect::<Vec<_>>();
+    let requests = valid
+        .iter()
+        .flat_map(|(_, transfer)| {
+            [
+                lambert_request(transfer, false),
+                lambert_request(transfer, true),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let Ok(problems) = solve_lambert_batch(&requests, workers) else {
+        return transfers.iter().map(lambert_delta_v).collect();
+    };
+
+    let mut output = vec![None; transfers.len()];
+    for ((index, transfer), directions) in valid.into_iter().zip(problems.chunks_exact(2)) {
+        let delta_v = directions
+            .iter()
+            .map(|problem| problem_delta_v(transfer, problem))
+            .fold(f64::INFINITY, f64::min);
+        output[index] = delta_v.is_finite().then_some(delta_v);
+    }
+    output
 }
 
 /// Self-contained fixed leg from body zero to body one of `easy.kttsp`.
@@ -272,16 +267,40 @@ impl FixedLegProblem {
 
     /// Propagates an ordered batch of body/epoch requests.
     ///
-    /// `workers = 1` is serial, values above one use exactly that many cached
-    /// Rayon threads, and values at or below zero use the global Rayon pool.
-    /// Output order always matches input order.
+    /// Each body group uses [`Ephemeris::states_parallel`]. Zero workers uses
+    /// Rayon's shared pool, one is serial, and larger values use exactly that
+    /// many cached threads. Invalid rows stay `None` in input order.
     #[must_use]
     pub fn propagate_batch(
         &self,
         requests: &[PropagationRequest],
-        workers: i32,
+        workers: usize,
     ) -> Vec<Option<[f64; 6]>> {
-        parallel_batch(requests, workers, |request| self.propagate(*request))
+        let mut output = vec![None; requests.len()];
+        for (body_index, body) in self.bodies.iter().enumerate() {
+            let selected = requests
+                .iter()
+                .enumerate()
+                .filter(|(_, request)| {
+                    request.body_index == body_index && request.epoch_day.is_finite()
+                })
+                .map(|(index, request)| (index, request.epoch_day))
+                .collect::<Vec<_>>();
+            let epochs = selected.iter().map(|(_, epoch)| *epoch).collect::<Vec<_>>();
+            match body.states_parallel(&epochs, workers) {
+                Ok(states) => {
+                    for ((index, _), state) in selected.iter().zip(states) {
+                        output[*index] = Some(state);
+                    }
+                }
+                Err(_) => {
+                    for (index, epoch) in selected {
+                        output[index] = body.state(epoch).ok();
+                    }
+                }
+            }
+        }
+        output
     }
 
     /// Propagates both endpoints of one valid fixed-leg decision.
@@ -316,11 +335,16 @@ impl FixedLegProblem {
 
     /// Evaluates a fixed-leg batch with staged parallelism.
     ///
-    /// All departure and arrival ephemerides are propagated in one ordered
-    /// batch, followed by one ordered batch containing every valid Lambert
-    /// computation. Invalid inputs remain `None` at their original positions.
+    /// Departure and arrival requests are grouped by ephemeris and each group
+    /// uses the published propagation batch, followed by one published Lambert
+    /// batch containing both directions of every valid transfer. Invalid inputs
+    /// remain `None` at their original positions.
     #[must_use]
-    pub fn evaluate_batch(&self, decisions: &[Decision], workers: i32) -> Vec<Option<Evaluation>> {
+    pub fn evaluate_batch(
+        &self,
+        decisions: &[Decision],
+        workers: usize,
+    ) -> Vec<Option<Evaluation>> {
         let propagation_requests = decisions
             .iter()
             .flat_map(|decision| {
@@ -351,9 +375,22 @@ impl FixedLegProblem {
                 ))
             })
             .collect::<Vec<_>>();
-        let delta_vs = parallel_batch(&transfers, workers, |transfer| {
-            transfer.as_ref().and_then(lambert_delta_v)
-        });
+        let compact_transfers = transfers
+            .iter()
+            .filter_map(|value| *value)
+            .collect::<Vec<_>>();
+        let compact_delta_vs = lambert_delta_v_batch(&compact_transfers, workers);
+        let mut compact_delta_vs = compact_delta_vs.into_iter();
+        let delta_vs = transfers
+            .iter()
+            .map(|transfer| {
+                if transfer.is_some() {
+                    compact_delta_vs.next().flatten()
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
         decisions
             .iter()
             .zip(delta_vs)
@@ -367,7 +404,7 @@ impl FixedLegProblem {
     ///
     /// Invalid rows use the same finite replacement as [`Objective`].
     #[must_use]
-    pub fn objective_batch(&self, decisions: &[Decision], workers: i32) -> Vec<f64> {
+    pub fn objective_batch(&self, decisions: &[Decision], workers: usize) -> Vec<f64> {
         self.evaluate_batch(decisions, workers)
             .into_iter()
             .map(|evaluation| evaluation.map_or(NAN_REPLACEMENT, |value| value.objective))
@@ -429,6 +466,58 @@ fn difference_norm(left: [f64; 3], right: [f64; 3]) -> f64 {
         .map(|(left, right)| (left - right).powi(2))
         .sum::<f64>()
         .sqrt()
+}
+
+fn valid_lambert_transfer(transfer: &LambertTransfer) -> bool {
+    transfer
+        .departure_state
+        .iter()
+        .chain(&transfer.arrival_state)
+        .all(|value| value.is_finite())
+        && transfer.tof_seconds.is_finite()
+        && transfer.tof_seconds > 0.0
+        && transfer.mu.is_finite()
+        && transfer.mu > 0.0
+}
+
+fn lambert_request(transfer: &LambertTransfer, clockwise: bool) -> LambertRequest {
+    LambertRequest::new(
+        [
+            transfer.departure_state[0],
+            transfer.departure_state[1],
+            transfer.departure_state[2],
+        ],
+        [
+            transfer.arrival_state[0],
+            transfer.arrival_state[1],
+            transfer.arrival_state[2],
+        ],
+        transfer.tof_seconds,
+        transfer.mu,
+        clockwise,
+        transfer.maximum_revolutions,
+    )
+}
+
+fn problem_delta_v(transfer: &LambertTransfer, problem: &LambertProblem) -> f64 {
+    let initial_velocity = [
+        transfer.departure_state[3],
+        transfer.departure_state[4],
+        transfer.departure_state[5],
+    ];
+    let final_velocity = [
+        transfer.arrival_state[3],
+        transfer.arrival_state[4],
+        transfer.arrival_state[5],
+    ];
+    problem
+        .solutions()
+        .iter()
+        .map(|solution| {
+            difference_norm(solution.departure_velocity, initial_velocity)
+                + difference_norm(solution.arrival_velocity, final_velocity)
+        })
+        .fold(f64::INFINITY, f64::min)
 }
 
 #[cfg(test)]
