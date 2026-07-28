@@ -85,8 +85,8 @@ to amortize scheduling and allocation:
 - low-thrust leg mismatch/constraint evaluation across independent legs or
   candidates.
 
-This experiment motivated the generic ordered batch layer now published in
-`pykep-core 0.1.2`, and the native benchmark consumes that release. The
+This experiment motivated the generic ordered batch layer introduced in
+`pykep-core 0.1.2`; the native benchmark now consumes `0.1.3`. The
 historical Python-wheel table above remains explicitly labeled `pykep-rust
 0.1.1` because those measurements have not been rerun. Scalar APIs remain
 useful: tiny batches can be slower because thread scheduling and intermediate
@@ -105,7 +105,7 @@ arrays dominate.
 - `test_pykep_rust_transfer.py`: installed-wheel integration and parity test.
 - `rust/`: standalone native benchmark and ordered parallel propagation,
   Lambert, full-transfer, and CMA ask/tell batch APIs using crates.io
-  `pykep-core = "=0.1.2"` and `fcmaes-core = "=0.1.3"`, with no path
+  `pykep-core = "=0.1.3"` and `fcmaes-core = "=0.1.3"`, with no path
   dependencies.
 - `NUMBA_LAMBERT_BENCHMARKS.md`: derivation notes, benchmark numbers, and
   interpretation.

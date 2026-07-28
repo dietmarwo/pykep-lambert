@@ -63,7 +63,7 @@ Two published Rust deployment paths are included:
 - `pykep_rust_transfer.py` exercises the `pykep-rust 0.1.1` PyPI wheel through
   its Python `Planet` and `LambertProblem` APIs.
 - `rust/` is an independent Cargo project pinned to crates.io
-  `pykep-core = "=0.1.2"` and `fcmaes-core = "=0.1.3"`. It has no path or
+  `pykep-core = "=0.1.3"` and `fcmaes-core = "=0.1.3"`. It has no path or
   Git dependencies on either development repository.
 
 Some KTTSP input rows use non-canonical inclination representations accepted
@@ -77,7 +77,7 @@ published wheel.
 - Problem: `problems/easy.kttsp`
 - pykep: `2.6`
 - pykep-rust wheel: `0.1.1`
-- pykep-core crate: `=0.1.2`
+- pykep-core crate: `=0.1.3`
 - fcmaes-core crate: `=0.1.3`
 - Python: `3.12.13`
 - Rust: release profile, Rust `1.88` minimum
@@ -295,8 +295,8 @@ so this small population cannot amortize scheduling and intermediate-vector
 costs. Large transfer grids still gain 4–5x; larger populations and more
 expensive objective cases are the intended optimizer-batch use cases.
 
-Other existing pykep computations with published 0.1.2 batch entry points
-include vector operations, anomaly conversions,
+Other existing pykep computations with batch entry points introduced in
+`pykep-core 0.1.2` include vector operations, anomaly conversions,
 Lagrangian/universal/Keplerian propagation (including the Lagrangian STM and
 time-grid variants), ephemeris accelerations/periods/orbital elements, and ZOH
 low-thrust mismatch evaluation. This project does not add eclipse, access, or

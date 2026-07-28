@@ -49,7 +49,7 @@ The benchmark expects:
 
 The native benchmark in `rust/` expects Rust 1.88 or newer and pins:
 
-- `pykep-core = "=0.1.2"`
+- `pykep-core = "=0.1.3"`
 - `fcmaes-core = "=0.1.3"`
 
 Do not replace those with path dependencies when validating published
@@ -223,8 +223,9 @@ The native executable deliberately compares two strategies:
 - `full_transfer/parallel_scalar` and `cma_parallel_scalar` use
   `fcmaes_core::parallel_batch` or fcmaes' internal equivalent to distribute
   complete objectives with Rayon. Each objective calls only scalar pykep APIs.
-- `full_transfer/pykep_batch` and `cma_ask_tell_batch` stage the 0.1.2
-  ephemeris and Lambert batches inside one full population or transfer array.
+- `full_transfer/pykep_batch` and `cma_ask_tell_batch` stage the ephemeris and
+  Lambert batch APIs introduced in 0.1.2 inside one full population or
+  transfer array.
 
 The local code adds only KTTSP-specific grouping, two-direction reduction, and
 objective construction. Do not add eclipse, access, conjunction, or other

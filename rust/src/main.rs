@@ -433,7 +433,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse()?;
     let problem = FixedLegProblem::easy()?;
     println!(
-        "CONFIG source_commit={} pykep_core=0.1.2 fcmaes_core=0.1.3 \
+        "CONFIG source_commit={} pykep_core=0.1.3 fcmaes_core=0.1.3 \
          objective_evaluations={} optimizer_evaluations={} optimizer={:?} \
          cma_population={} workers={} seed={} dv_limit={}",
         SOURCE_COMMIT,

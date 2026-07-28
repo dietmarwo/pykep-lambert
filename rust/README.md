@@ -3,7 +3,7 @@
 This standalone crate ports the fixed-leg `easy.kttsp` optimization workload
 to native Rust. It deliberately uses only published registry packages:
 
-- `pykep-core = "=0.1.2"` for Keplerian propagation and Lambert solutions;
+- `pykep-core = "=0.1.3"` for Keplerian propagation and Lambert solutions;
 - `fcmaes-core = "=0.1.3"` for CMA-ES and BiteOpt.
 
 No path or Git dependencies point at either development repository. A normal
@@ -84,10 +84,10 @@ scheduling and intermediate-vector overhead. Larger populations or more
 expensive cases are the intended use case; keep the outer-Rayon mode for this
 small, fully independent objective.
 
-## Other existing 0.1.2 batch surfaces
+## Other existing batch surfaces
 
-`pykep-core 0.1.2` also exposes ordered batches for vector operations, anomaly
-conversions, Lagrangian/universal/Keplerian propagation (including the
+The batch layer introduced in `pykep-core 0.1.2` also covers vector operations,
+anomaly conversions, Lagrangian/universal/Keplerian propagation (including the
 Lagrangian STM and time-grid variants), ephemeris accelerations/periods/orbital
 elements, and ZOH low-thrust mismatch evaluation. Those APIs can be useful in
 future benchmarks when the corresponding existing pykep computation is part
