@@ -5,6 +5,9 @@ tooling to compare it against the original pykep implementation, the published
 `pykep-rust` Python wheel, and a standalone native Rust consumer.
 
 See the related post [Lunar Tomato War](https://www.linkedin.com/pulse/algorithms-ai-lunar-tomato-war-final-debrief-from-esas-wolz-qbxle).
+[Slides (PDF)](https://github.com/dietmarwo/pykep-lambert/blob/main/Architecting_the_Lunar_Tomato_War.pdf)
+· [YouTube video](https://youtu.be/lCkIzXee5vk)
+
 Experience building the transfer table during the SpOC 4 competition motivated
 the parallel batch extension developed in
 [dietmarwo/pykep-lambert](https://github.com/dietmarwo/pykep-lambert).
