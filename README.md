@@ -1,5 +1,7 @@
 # pykep Lambert Python, Numba, and Rust Benchmark
 
+> **One of 18 related repositories.** The [repository overview](https://github.com/dietmarwo/fcmaes-rust/blob/main/docs/repositories.md) shows what each one does and how they connect.
+
 This directory contains a Numba port of pykep 2.6's Izzo Lambert solver plus
 tooling to compare it against the original pykep implementation, the published
 `pykep-rust` Python wheel, and a standalone native Rust consumer.
