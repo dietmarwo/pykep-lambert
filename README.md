@@ -110,7 +110,7 @@ arrays dominate.
 - `test_pykep_rust_transfer.py`: installed-wheel integration and parity test.
 - `rust/`: standalone native benchmark and ordered parallel propagation,
   Lambert, full-transfer, and CMA ask/tell batch APIs using crates.io
-  `pykep-core = "=0.1.3"` and `fcmaes-core = "=0.1.3"`, with no path
+  `pykep-core = "=0.1.3"` and `fcmaes-core = "=0.5.0"`, with no path
   dependencies.
 - `NUMBA_LAMBERT_BENCHMARKS.md`: derivation notes, benchmark numbers, and
   interpretation.
