@@ -50,7 +50,7 @@ The benchmark expects:
 The native benchmark in `rust/` expects Rust 1.88 or newer and pins:
 
 - `pykep-core = "=0.1.3"`
-- `fcmaes-core = "=0.1.3"`
+- `fcmaes-core = "=0.5.0"`
 
 Do not replace those with path dependencies when validating published
 artifacts.

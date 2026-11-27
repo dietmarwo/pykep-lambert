@@ -63,7 +63,7 @@ Two published Rust deployment paths are included:
 - `pykep_rust_transfer.py` exercises the `pykep-rust 0.1.1` PyPI wheel through
   its Python `Planet` and `LambertProblem` APIs.
 - `rust/` is an independent Cargo project pinned to crates.io
-  `pykep-core = "=0.1.3"` and `fcmaes-core = "=0.1.3"`. It has no path or
+  `pykep-core = "=0.1.3"` and `fcmaes-core = "=0.5.0"` (0.1.3 until 27 November 2026; the numbers below were measured with 0.1.3). It has no path or
   Git dependencies on either development repository.
 
 Some KTTSP input rows use non-canonical inclination representations accepted
